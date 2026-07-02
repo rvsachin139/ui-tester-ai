@@ -137,20 +137,19 @@ export class TesterService {
     console.log(`[Tester] ${appUrl} (${deviceName}, ${browserName}, ${viewportStr})`);
 
     await page.goto(appUrl, { waitUntil: isIOS ? 'domcontentloaded' : 'networkidle', timeout: 45000 });
-    await page.waitForTimeout(isIOS ? 3000 : 1000);
+    await page.waitForTimeout(isIOS ? 3000 : 1500);
+
+    console.log(`  Page loaded: "${await page.title()}" [${page.url()}]`);
 
     if (instructions) {
       console.log(`  [instructions] Executing: ${instructions}`);
-      try {
-        const steps = await this.instructor.executeSteps(page, instructions);
-        for (const step of steps) {
-          allInstructionResults!.push(step);
-        }
-        console.log(`  [instructions] All steps done`);
-      } catch (err: any) {
-        console.log(`  [instructions] Failed: ${err.message}`);
-        allInstructionResults!.push({ step: instructions, status: 'error', error: err.message });
+      const steps = await this.instructor.executeSteps(page, instructions);
+      for (const step of steps) {
+        allInstructionResults!.push(step);
       }
+      console.log(`  [instructions] All steps done`);
+      const afterUrl = page.url();
+      console.log(`  After instructions: "${await page.title()}" [${afterUrl}]`);
     }
 
     const prefix = `ss-${Date.now()}`;

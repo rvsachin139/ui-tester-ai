@@ -127,12 +127,10 @@ export class TestsService {
       ];
     }
 
-    emit('test:progress', { phase: 'screenshots', message: `Capturing screenshots across ${devices.length} device(s) and ${browsers.length} browser(s)...` });
-
     const screenshotUrlPrefix = `/sessions/${sessionId}/screenshots/`;
 
     if (instructions) {
-      emit('test:progress', { phase: 'instructions', message: `Executing custom instructions on each device...` });
+      emit('test:progress', { phase: 'instructions', message: `Executing custom instructions before screenshots...` });
     }
 
     const { screenshots, results, instructionResults } = await this.tester.run({
@@ -159,8 +157,10 @@ export class TestsService {
 
     if (instructionResults && instructionResults.length > 0) {
       for (const r of instructionResults) {
-        if (r.status === 'error') {
-          emit('test:progress', { phase: 'instructions', message: `Instruction "${r.step}" failed: ${r.error}` });
+        if (r.status === 'done') {
+          emit('test:progress', { phase: 'instructions', message: `Step: ${r.step} ${r.result ? '— ' + r.result : ''}` });
+        } else if (r.status === 'error') {
+          emit('test:progress', { phase: 'instructions', message: `Step: ${r.step} — ${r.error}` });
         }
       }
     }
