@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.test
+sessions/
+screenshots/
+reports/
+scripts/stitch-*.json
+.DS_Store
