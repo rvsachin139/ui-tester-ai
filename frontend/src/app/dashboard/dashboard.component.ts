@@ -151,7 +151,6 @@ interface LogEntry {
                 class="toggle-btn"
                 [class.active]="!showGallery"
                 (click)="showGallery = false"
-                [disabled]="isRunning && showGallery"
               >Log</button>
               <button
                 class="toggle-btn"
@@ -797,7 +796,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
     const progressSub = this.socket.onProgress().subscribe((data: TestProgress) => {
       if (data.progress != null) this.stepsCompleted = data.progress;
-      this.addLog(data.message, 'running');
+      this.addLog(data.message, data.type || 'running');
     });
 
     const screenshotSub = this.socket.onScreenshot().subscribe((data) => {
@@ -920,6 +919,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
   private addLog(message: string, type: LogEntry['type']) {
     const now = new Date();
     const timestamp = now.toLocaleTimeString('en-US', { hour12: false });
+    if (type === 'running') {
+      this.logs = this.logs.map(l => l.type === 'running' ? { ...l, type: 'info' as const } : l);
+    }
     this.logs = [...this.logs, { message, type, timestamp }];
   }
 

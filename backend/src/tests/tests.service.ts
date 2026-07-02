@@ -152,23 +152,47 @@ export class TestsService {
           },
         });
       },
+      onInstruction: (r) => {
+        const type = r.status === 'error' ? 'error' : 'success';
+        let msg = `Step: ${r.step}`;
+        if (r.status === 'done' && r.result) msg += ` — ${r.result}`;
+        else if (r.status === 'error') {
+          msg += ` — ${r.error}`;
+          if (r.evidence) msg += ` (evidence: /sessions/${sessionId}/screenshots/${r.evidence})`;
+        }
+        emit('test:progress', { phase: 'instructions', message: msg, type });
+      },
       shouldAbort,
     });
 
-    if (instructionResults && instructionResults.length > 0) {
+    // Emit evidence screenshots from failed instruction steps
+    if (instructionResults) {
       for (const r of instructionResults) {
-        if (r.status === 'done') {
-          emit('test:progress', { phase: 'instructions', message: `Step: ${r.step} ${r.result ? '— ' + r.result : ''}` });
-        } else if (r.status === 'error') {
-          emit('test:progress', { phase: 'instructions', message: `Step: ${r.step} — ${r.error}` });
+        if (r.evidence) {
+          emit('test:screenshot', {
+            screenshot: {
+              file: r.evidence,
+              path: r.evidence,
+              url: `/sessions/${sessionId}/screenshots/${r.evidence}`,
+              device: 'evidence',
+              browser: 'instruction',
+              viewport: '',
+              state: 'error',
+            },
+          });
         }
       }
+    }
+
+    if (instructionResults?.some((r) => r.status === 'error')) {
+      emit('test:error', { sessionId, error: `Instruction execution failed: ${instructionResults.find((r) => r.status === 'error')?.error || 'Unknown error'}` });
+      return;
     }
 
     if (results && results.length > 0) {
       for (const r of results) {
         if (r.status === 'error') {
-          emit('test:progress', { phase: 'screenshots', message: `Error on ${r.device}/${r.browser}: ${r.error}` });
+          emit('test:progress', { phase: 'screenshots', message: `Error on ${r.device}/${r.browser}: ${r.error}`, type: 'error' });
         }
       }
     }

@@ -21,7 +21,7 @@ export class AppModule {
         ConfigModule.forRoot({
           isGlobal: true,
           load: [configuration, databaseConfig],
-          envFilePath: ['.env', '.env.test'],
+          envFilePath: ['.env.test', '.env'],
         }),
         DatabaseModule,
         DevicesModule,

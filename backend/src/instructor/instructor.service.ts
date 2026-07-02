@@ -6,97 +6,112 @@ interface StepResult {
   status: 'done' | 'error';
   result?: string;
   error?: string;
+  evidence?: string;
 }
 
 @Injectable()
 export class InstructorService {
   constructor(private readonly aiInstructor: AiInstructorService) {}
 
-  async executeSteps(page: any, instructions: string, params: Record<string, string> = {}): Promise<StepResult[]> {
-    const steps = await this.parse(instructions, params);
+  async executeSteps(
+    page: any,
+    instructions: string,
+    _params: Record<string, string> = {},
+    onStep?: (r: StepResult) => void,
+    screenshotDir?: string,
+    onEvidence?: (file: string) => void,
+  ): Promise<StepResult[]> {
     const results: StepResult[] = [];
+    if (!instructions) return results;
 
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      console.log(`[Step ${i + 1}/${steps.length}] ${step.description}`);
+    console.log(`[Instructor] Input: ${instructions}`);
+
+    let reformatted = await this.aiInstructor.reformat(instructions);
+    let lines: string[] = [];
+
+    if (reformatted) {
+      console.log(`[Instructor] AI reformatted: ${reformatted}`);
+      lines = reformatted.split('\n').map((l) => l.trim()).filter(Boolean);
+    } else {
+      console.log(`[Instructor] AI returned null, using regex fallback`);
+    }
+
+    if (lines.length === 0) {
+      lines = this.parseRawInstructions(instructions);
+      if (lines.length > 0) {
+        console.log(`[Instructor] Regex fallback produced: ${JSON.stringify(lines)}`);
+      }
+    }
+
+    if (lines.length === 0) {
+      const r: StepResult = { step: instructions, status: 'error', error: 'Could not parse any actionable steps' };
+      results.push(r);
+      if (onStep) onStep(r);
+      return results;
+    }
+
+    for (const line of lines) {
+      console.log(`[Instructor] Exec: ${line}`);
+      const step = this.parseLine(line);
+      if (!step) {
+        console.log(`[Instructor] Unrecognized: ${line}`);
+        const r: StepResult = { step: line, status: 'error', error: 'Unrecognized command format' };
+        results.push(r);
+        if (onStep) onStep(r);
+        continue;
+      }
       try {
         const result = await this.execute(page, step);
-        results.push({ step: step.description, status: 'done', result });
+        const r: StepResult = { step: step.description, status: 'done', result };
+        results.push(r);
         console.log(`  \u2713 ${result}`);
+        if (onStep) onStep(r);
       } catch (err) {
-        const msg = `Failed: ${err.message}`;
-        results.push({ step: step.description, status: 'error', error: err.message });
+        const msg = err.message || 'Unknown error';
+        const r: StepResult = { step: step.description, status: 'error', error: msg };
+        if (screenshotDir) {
+          try {
+            await page.waitForLoadState('load').catch(() => {});
+            await page.waitForTimeout(2000);
+            const evidenceBuf = await page.screenshot({ fullPage: true });
+            const evidenceFile = `evidence-${Date.now()}.png`;
+            const { writeFileSync } = require('fs');
+            const { join } = require('path');
+            writeFileSync(join(screenshotDir, evidenceFile), evidenceBuf);
+            r.evidence = evidenceFile;
+            if (onEvidence) onEvidence(evidenceFile);
+          } catch {}
+        }
+        results.push(r);
         console.log(`  \u2717 ${msg}`);
+        if (onStep) onStep(r);
+        throw new Error(`Stopped at step: ${msg}`);
       }
     }
 
     return results;
   }
 
-  private async parse(text: string, params: Record<string, string>): Promise<any[]> {
-    const aiSteps = await this.aiInstructor.parse(text);
-    if (aiSteps && aiSteps.length > 0) {
-      console.log(`  [AiInstructor] Generated ${aiSteps.length} step(s):`, JSON.stringify(aiSteps));
-      return aiSteps.map((s: any) => ({
-        description: s.text ? `${s.action} "${s.text}" into "${s.target}"` : s.target ? `${s.action} "${s.target}"` : s.action,
-        ...s,
-      }));
-    }
-
-    const rawLines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-    const lines: string[] = [];
-    for (const line of rawLines) {
-      const parts = line.split(/\s+(?:and|then|so\s+that)\s+/i);
-      for (const p of parts) {
-        const sub = p.trim();
-        if (sub) lines.push(sub);
+  private parseLine(line: string): any {
+    const patterns: [RegExp, (m: RegExpMatchArray) => any][] = [
+      [/^click\s+"(.+?)"$/i, (m) => ({ action: 'click', target: m[1] })],
+      [/^type\s+"(.+?)"\s+into\s+"(.+?)"$/i, (m) => ({ action: 'type', text: m[1], target: m[2] })],
+      [/^navigate\s+"(.+?)"$/i, (m) => ({ action: 'navigate', url: m[1] })],
+      [/^wait\s+(\d+)$/i, (m) => ({ action: 'wait', ms: (parseInt(m[1]) || 1) * 1000 })],
+      [/^scroll\s+(down|up)$/i, (m) => ({ action: 'scroll', direction: m[1] })],
+      [/^scroll\s+to\s+"(.+?)"$/i, (m) => ({ action: 'scroll', direction: 'to ' + m[1] })],
+      [/^hover\s+"(.+?)"$/i, (m) => ({ action: 'hover', target: m[1] })],
+      [/^screenshot/i, () => ({ action: 'screenshot' })],
+    ];
+    for (const [regex, build] of patterns) {
+      const m = line.match(regex);
+      if (m) {
+        const step = build(m);
+        step.description = line;
+        return step;
       }
     }
-
-    const steps: any[] = [];
-
-    for (const line of lines) {
-      const resolved = line.replace(/\{(\w+)\}/g, (_, k) => params[k] || `{${k}}`);
-      let step: any = { description: resolved };
-
-      const patterns: [RegExp, (m: RegExpMatchArray) => any][] = [
-        [/^go\s+to\s+(https?:\/\/\S+)/i, (m) => ({ action: 'navigate', url: m[1] })],
-        [/^navigate\s+to\s+(https?:\/\/\S+)/i, (m) => ({ action: 'navigate', url: m[1] })],
-        [/^(?:click|tap|press)\s+(?:on\s+)?["']?(.+?)["']?$/i, (m) => ({ action: 'click', target: m[1].replace(/\s+(?:button|link|icon)$/i, '').trim() })],
-        [/^(?:type|enter)\s+["'](.+?)["']\s+(?:into|in)\s+(?:the\s+)?["']?(.+?)["']?$/i, (m) => ({ action: 'type', text: m[1], target: m[2] })],
-        [/^(?:type|enter)\s+(?:the\s+)?["'](.+?)["'](?:\s+(?:into|in)\s+(?:the\s+)?["']?(.+?)["']?)?$/i, (m) => ({ action: 'type', text: m[1], target: m[2] || 'field' })],
-        [/^fill\s+["'](.+?)["']\s+(?:into|in)\s+(?:the\s+)?["']?(.+?)["']?$/i, (m) => ({ action: 'type', text: m[1], target: m[2] })],
-        [/^input\s+["'](.+?)["']\s+(?:into|in)\s+(?:the\s+)?["']?(.+?)["']?$/i, (m) => ({ action: 'type', text: m[1], target: m[2] })],
-        [/^(?:select|choose)\s+["'](.+?)["']\s+(?:from|in)\s+(?:the\s+)?["']?(.+?)["']?$/i, (m) => ({ action: 'select', option: m[1], target: m[2] })],
-        [/^(?:check|tick)\s+(?:the\s+)?["']?(.+?)["']?$/i, (m) => ({ action: 'check', target: m[1] })],
-        [/^(?:uncheck|untick)\s+(?:the\s+)?["']?(.+?)["']?$/i, (m) => ({ action: 'uncheck', target: m[1] })],
-        [/^hover\s+(?:over\s+)?["']?(.+?)["']?$/i, (m) => ({ action: 'hover', target: m[1] })],
-        [/^scroll\s+(down|up|to\s+.+)/i, (m) => ({ action: 'scroll', direction: m[1] })],
-        [/^(?:wait|pause)\s+(?:for\s+)?(\d+)\s*(?:seconds?|s)?$/i, (m) => ({ action: 'wait', ms: parseInt(m[1]) * 1000 })],
-        [/^(?:take\s+)?screenshot/i, () => ({ action: 'screenshot' })],
-        [/^try\s+to\s+(?:log\s*in|login|sign\s*in).*/i, () => ({ action: 'wait', ms: 500 })],
-        [/^(?:log\s*in|login|sign\s*in)$/i, () => ({ action: 'click', target: 'login' })],
-        [/^(?:try\s+to\s+)?register|sign\s*up|create\s+(?:an?\s+)?account/i, () => ({ action: 'click', target: 'sign up' })],
-        [/^.+\s+with\s+(?:below\s+)?(creds|credentials|info)$/i, () => ({ action: 'wait', ms: 500 })],
-        [/^user[:\s]+(.+)/i, (m) => ({ action: 'type', text: m[1].trim(), target: 'email' })],
-        [/^email[:\s]+(.+)/i, (m) => ({ action: 'type', text: m[1].trim(), target: 'email' })],
-        [/^pass(?:word)?[:\s]+(.+)/i, (m) => ({ action: 'type', text: m[1].trim(), target: 'password' })],
-        [/^(.+@.+\..+)$/i, (m) => ({ action: 'type', text: m[1].trim(), target: 'email' })],
-      ];
-
-      for (const [regex, build] of patterns) {
-        const m = resolved.match(regex);
-        if (m) {
-          step = { ...step, ...build(m) };
-          break;
-        }
-      }
-
-      if (!step.action) step.action = 'unknown';
-      steps.push(step);
-    }
-
-    return steps;
+    return null;
   }
 
   private async execute(page: any, step: any): Promise<string> {
@@ -104,25 +119,13 @@ export class InstructorService {
       case 'navigate':
         await page.goto(step.url, { waitUntil: 'networkidle', timeout: 30000 });
         return `Navigated to ${step.url}`;
-
       case 'click':
         return this.executeClick(page, step.target);
-
       case 'type':
         return this.executeType(page, step.text, step.target);
-
-      case 'select':
-        return this.executeSelect(page, step.option, step.target);
-
-      case 'check':
-        return this.executeCheck(page, step.target, true);
-
-      case 'uncheck':
-        return this.executeCheck(page, step.target, false);
-
-      case 'hover':
-        return this.executeHover(page, step.target);
-
+      case 'wait':
+        await page.waitForTimeout(step.ms);
+        return `Waited ${step.ms}ms`;
       case 'scroll':
         if (step.direction.startsWith('to ')) {
           await this.executeScrollTo(page, step.direction.slice(3));
@@ -131,97 +134,64 @@ export class InstructorService {
           await page.evaluate((y: number) => window.scrollTo(0, y), y);
         }
         return `Scrolled ${step.direction}`;
-
-      case 'wait':
-        await page.waitForTimeout(step.ms);
-        return `Waited ${step.ms}ms`;
-
+      case 'hover':
+        return this.executeHover(page, step.target);
       case 'screenshot':
-        return 'Screenshot queued';
-
+        return 'Screenshot taken';
       default:
         return `Skipped: ${step.description}`;
     }
   }
 
-  private escapeRegex(s: string) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-
-  private generateClickTargets(target: string): string[] {
-    const targets = [target];
-    const stripped = target.replace(/\s+(button|link|icon|menu|tab|item|option)$/i, '').trim();
-    if (stripped !== target) targets.push(stripped);
-
-    const lower = target.toLowerCase();
-    if (lower === 'login' || lower === 'log in') {
-      targets.push('Log In', 'Sign In', 'sign in');
-    } else if (lower === 'sign in' || lower === 'signin') {
-      targets.push('Sign In', 'Log In', 'login');
-    } else if (lower === 'submit') {
-      targets.push('Submit', 'submit');
-    }
-
-    const words = target.split(/\s+/);
-    if (words.length > 1) {
-      targets.push(words[0]);
-    }
-
-    return [...new Set(targets)];
-  }
-
   private async executeClick(page: any, target: string) {
-    const candidates = this.generateClickTargets(target);
-    for (const t of candidates) {
-      const escaped = this.escapeRegex(t);
+    const targets = [target];
+    if (target.includes(' ')) targets.push(target.replace(/\s+/g, ''));
+    // Login/sign-in variants — try common alternatives
+    if (/log\s*in/i.test(target) && !targets.includes('Sign In')) targets.push('Sign In');
+    if (/sign\s*in/i.test(target) && !targets.includes('Log In')) targets.push('Log In');
+    for (const t of targets) {
+      const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const flexEscaped = escaped.replace(/\s+/g, '\\s*');
       const locators: any[] = [
-        page.getByRole('button', { name: new RegExp(escaped, 'i') }),
-        page.getByRole('link', { name: new RegExp(escaped, 'i') }),
-        page.getByText(new RegExp(escaped, 'i')),
+        page.getByRole('button', { name: new RegExp(flexEscaped, 'i') }),
+        page.getByRole('link', { name: new RegExp(flexEscaped, 'i') }),
+        page.getByText(new RegExp(flexEscaped, 'i')),
         page.locator(`button:has-text("${t}"), a:has-text("${t}"), [role="button"]:has-text("${t}")`),
-        page.locator(`[data-testid="${t}"]`),
-        page.locator(`#${t}`),
         page.locator(`[aria-label="${t}"]`),
         page.locator(`[href*="${t.toLowerCase()}"]`),
-        page.locator(`[href*="${t.toLowerCase().replace(/\s+/g, '-')}"]`),
-        page.locator(`[href*="${t.toLowerCase().replace(/\s+/g, '')}"]`),
       ];
       for (const loc of locators) {
-        if ((await loc.count()) > 0) {
+        if (await this.safeCount(loc)) {
           await loc.first().evaluate((el: any) => el.click());
           await page.waitForTimeout(2000);
           await page.waitForLoadState('networkidle').catch(() => {});
-          const afterUrl = page.url();
-          return `Clicked "${t}" (now at: ${afterUrl})`;
+          return `Clicked "${t}"`;
         }
-      }
-
-      const found = await page.evaluate((text: string) => {
-        const tags = ['button', 'a', 'span', 'div', 'input', 'li', 'label'];
-        const lower = text.toLowerCase();
-        for (const tag of tags) {
-          const els = document.querySelectorAll(tag);
-          for (const el of els) {
-            if (el.textContent?.toLowerCase().includes(lower) &&
-                (el instanceof HTMLElement || el instanceof SVGElement)) {
-              (el as HTMLElement).click();
-              return { clicked: true, tag: el.tagName, text: el.textContent?.trim().slice(0, 50) };
-            }
-          }
-        }
-        return null;
-      }, t);
-      if (found) {
-        await page.waitForTimeout(2000);
-        await page.waitForLoadState('networkidle').catch(() => {});
-        return `Clicked "${t}" via evaluate (${found.tag}: "${found.text}")`;
       }
     }
-    throw new Error(`Could not find clickable element for: "${target}"`);
+    const found = await page.evaluate((text: string) => {
+      for (const tag of ['button', 'a', 'span', 'div', 'input', 'li', 'label']) {
+        for (const el of document.querySelectorAll(tag)) {
+          if (el.textContent?.toLowerCase().includes(text.toLowerCase()) &&
+              (el instanceof HTMLElement || el instanceof SVGElement)) {
+            (el as HTMLElement).scrollIntoView({ block: 'center' });
+            (el as HTMLElement).click();
+            return { tag: el.tagName, text: el.textContent?.trim().slice(0, 50) };
+          }
+        }
+      }
+      return null;
+    }, target);
+    if (found) {
+      await page.waitForTimeout(2000);
+      await page.waitForLoadState('networkidle').catch(() => {});
+      return `Clicked "${target}" via evaluate (${found.tag})`;
+    }
+    throw new Error(`Could not find clickable element: "${target}"`);
   }
 
   private async executeType(page: any, text: string, target: string) {
-    const escaped = this.escapeRegex(target);
+    const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const isPassword = /pass/i.test(target);
     const locators: any[] = [
       page.getByPlaceholder(new RegExp(escaped, 'i')),
@@ -230,58 +200,28 @@ export class InstructorService {
       ...(isPassword ? [page.locator('input[type="password"]')] : []),
       page.locator(`[name*="${target}"]`),
       page.locator(`[id*="${target}"]`),
-      page.locator(`#${target}`),
       page.locator(`[aria-label="${target}"]`),
-      page.locator(`input[type="${isPassword ? 'password' : 'text'}"], input:not([type])`),
+      page.locator(`input:not([type]), input[type="${isPassword ? 'password' : 'text'}"]`),
     ];
     for (const loc of locators) {
-      if ((await loc.count()) > 0) {
+      if (await this.safeCount(loc)) {
         await loc.first().fill(text);
         return `Typed "${text}" into "${target}"`;
       }
     }
-    throw new Error(`Could not find input for: "${target}"`);
-  }
-
-  private async executeSelect(page: any, option: string, target: string) {
-    const locators = [
-      page.getByRole('combobox', { name: target }),
-      page.getByLabel(target),
-      page.locator(`select[name="${target}"]`),
-    ];
-    for (const loc of locators) {
-      if ((await loc.count()) > 0) {
-        await loc.first().selectOption(option);
-        return `Selected "${option}"`;
-      }
-    }
-    throw new Error(`Could not find select: "${target}"`);
-  }
-
-  private async executeCheck(page: any, target: string, checked: boolean) {
-    const locators = [
-      page.getByRole('checkbox', { name: target }),
-      page.getByLabel(target),
-      page.locator(`#${target}`),
-    ];
-    for (const loc of locators) {
-      if ((await loc.count()) > 0) {
-        if (checked) await loc.first().check();
-        else await loc.first().uncheck();
-        return `${checked ? 'Checked' : 'Unchecked'} "${target}"`;
-      }
-    }
-    throw new Error(`Could not find checkbox: "${target}"`);
+    throw new Error(`Could not find input: "${target}"`);
   }
 
   private async executeHover(page: any, target: string) {
+    const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const locators = [
-      page.getByRole('button', { name: target }),
-      page.getByRole('link', { name: target }),
-      page.getByText(target),
+      page.getByRole('button', { name: new RegExp(escaped, 'i') }),
+      page.getByRole('link', { name: new RegExp(escaped, 'i') }),
+      page.getByText(new RegExp(escaped, 'i')),
+      page.locator(`button:has-text("${target}"), a:has-text("${target}")`),
     ];
     for (const loc of locators) {
-      if ((await loc.count()) > 0) {
+      if (await this.safeCount(loc)) {
         await loc.first().hover();
         return `Hovered "${target}"`;
       }
@@ -296,11 +236,97 @@ export class InstructorService {
       page.locator(`#${target}`),
     ];
     for (const loc of locators) {
-      if ((await loc.count()) > 0) {
+      if (await this.safeCount(loc)) {
         await loc.first().scrollIntoViewIfNeeded();
         return true;
       }
     }
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  }
+
+  private parseRawInstructions(text: string): string[] {
+    const lines: string[] = [];
+    const lower = text.toLowerCase();
+
+    // === Login with credentials (user: X pass: Y) ===
+    const loginMatch = lower.match(
+      /(?:user|username|email)\s*:\s*(\S+@?\S*)\s+(?:pass|password)\s*:\s*(\S+)/i
+    );
+    if (loginMatch) {
+      const idxUser = lower.indexOf('user');
+      const before = idxUser >= 0 ? text.slice(0, idxUser) : '';
+      for (const t of this.extractClicks(before)) {
+        lines.push(`click "${t}"`);
+      }
+      lines.push(`type "${loginMatch[1]}" into "Email"`);
+      lines.push(`type "${loginMatch[2]}" into "Password"`);
+      const idxPass = lower.indexOf('pass');
+      const after = idxPass >= 4 ? text.slice(idxPass + 4) : text;
+      for (const t of this.extractClicks(after)) {
+        if (!/(log|sign)\s*(in|on)/i.test(t)) {
+          lines.push(`click "${t}"`);
+        }
+      }
+      return lines;
+    }
+
+    // === Individual clicks ===
+    for (const t of this.extractClicks(text)) {
+      lines.push(`click "${t}"`);
+    }
+
+    // === Type / fill ===
+    const typeRe = /(?:type|enter|fill)\s+["""]?(.+?)["""]\s+(?:into|in)\s+["""]?(.+?)["""]/gi;
+    let tm: RegExpExecArray | null;
+    while ((tm = typeRe.exec(text)) !== null) {
+      lines.push(`type "${tm[1]}" into "${tm[2]}"`);
+    }
+
+    // === Navigate ===
+    const navM = text.match(/(?:navigate|go)\s+to\s+["""]?(.+?)["""]?[.,!?]?$/im);
+    if (navM) lines.push(`navigate "${navM[1]}"`);
+
+    // === Scroll ===
+    if (/scroll\s+down/i.test(text)) lines.push('scroll down');
+    if (/scroll\s+up/i.test(text)) lines.push('scroll up');
+
+    // === Hover ===
+    const hoverRe = /hover\s+(?:over\s+)?["""]?(.+?)["""]?(?:\s+[.,!?]|$)/gi;
+    let hm: RegExpExecArray | null;
+    while ((hm = hoverRe.exec(text)) !== null) {
+      const t = hm[1].trim();
+      if (t && t.length > 1) lines.push(`hover "${t}"`);
+    }
+
+    return [...new Set(lines)];
+  }
+
+  private extractClicks(text: string): string[] {
+    const targets: string[] = [];
+    // Split on sentence boundaries / list connectors
+    const segments = text.split(/(?:\.\s*|;\s*|and\s+|then\s+)/i);
+    for (const seg of segments) {
+      const s = seg.trim();
+      const m = s.match(/click\s+(?:on\s+)?(.+)/i);
+      if (!m) continue;
+      let raw = m[1].trim();
+      // Strip parenthetical details like "(gb-icon name=ai-sparkle)"
+      raw = raw.replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+      // Strip location phrases first ("in header", "on page", etc.)
+      raw = raw.replace(/\s+(?:in|on|at)\s+\S+/i, '');
+      // Strip trailing element types
+      raw = raw.replace(/\s+(?:button|link|icon|tab|item|checkbox|radio|option|toggle|menu)\s*$/i, '');
+      // Strip quotes and punctuation
+      raw = raw.replace(/^\s*["""]+|["""]+\s*$/g, '').replace(/[.,!?]+$/, '').trim();
+      // Normalize common login variants
+      if (/^login$/i.test(raw)) raw = 'Log In';
+      else if (/^signin$/i.test(raw)) raw = 'Sign In';
+      if (raw && raw.length > 1) targets.push(raw);
+    }
+    return targets;
+  }
+
+  private async safeCount(loc: any): Promise<boolean> {
+    try { return (await loc.count()) > 0; } catch { return false; }
   }
 }

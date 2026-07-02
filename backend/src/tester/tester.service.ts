@@ -36,6 +36,7 @@ interface TestRunOptions {
   screenshotDir: string;
   instructions?: string;
   onScreenshot?: (screenshot: ScreenshotResult) => void;
+  onInstruction?: (result: { step: string; status: string; result?: string; error?: string; evidence?: string }) => void;
   shouldAbort?: () => boolean;
 }
 
@@ -51,9 +52,10 @@ export class TesterService {
     const results: any[] = [];
     const screenshots: ScreenshotResult[] = [];
     const allInstructionResults: any[] = [];
+    let instructionFailed = false;
 
     for (const bc of options.browsers) {
-      if (options.shouldAbort?.()) break;
+      if (options.shouldAbort?.() || instructionFailed) break;
 
       const browserType = BROWSER_MAP[bc.browserKey];
       if (!browserType) {
@@ -63,7 +65,7 @@ export class TesterService {
       const browser = await browserType.launch({ headless: true });
 
       for (const device of options.devices) {
-        if (options.shouldAbort?.()) break;
+        if (options.shouldAbort?.() || instructionFailed) break;
         const deviceName = device.deviceId || device.label || 'unknown';
         const isPlaywrightDevice = !!device.playwrightDevice;
 
@@ -85,7 +87,7 @@ export class TesterService {
               await this.captureDeviceStates(
                 page, options.appUrl, 'safari-ios', deviceName,
                 `${descriptor.viewport.width}x${descriptor.viewport.height}`,
-                screenshots, options.screenshotDir, options.instructions, options.onScreenshot, allInstructionResults,
+                screenshots, options.screenshotDir, options.instructions, options.onScreenshot, options.onInstruction, allInstructionResults,
               );
             } finally {
               await page.close().catch(() => {});
@@ -102,7 +104,7 @@ export class TesterService {
               await this.captureDeviceStates(
                 page, options.appUrl, bc.browserKey, deviceName,
                 `${device.width}x${device.height}`,
-                screenshots, options.screenshotDir, options.instructions, options.onScreenshot, allInstructionResults,
+                screenshots, options.screenshotDir, options.instructions, options.onScreenshot, options.onInstruction, allInstructionResults,
               );
             } finally {
               await page.close().catch(() => {});
@@ -110,6 +112,11 @@ export class TesterService {
             }
           }
         } catch (err: any) {
+          if (err.isInstructionError) {
+            results.push({ device: deviceName, browser: bc.browserKey, status: 'error', error: `Instruction failed: ${err.message}` });
+            instructionFailed = true;
+            break;
+          }
           console.error(`[Tester] Error on ${deviceName}/${bc.browserKey}: ${err.message}`);
           results.push({ device: deviceName, browser: bc.browserKey, status: 'error', error: err.message });
         }
@@ -131,23 +138,60 @@ export class TesterService {
     screenshotDir: string,
     instructions?: string,
     onScreenshot?: (s: ScreenshotResult) => void,
+    onInstruction?: (r: { step: string; status: string; result?: string; error?: string; evidence?: string }) => void,
     allInstructionResults?: any[],
   ): Promise<void> {
-    const isIOS = browserName === 'safari-ios';
     console.log(`[Tester] ${appUrl} (${deviceName}, ${browserName}, ${viewportStr})`);
 
-    await page.goto(appUrl, { waitUntil: isIOS ? 'domcontentloaded' : 'networkidle', timeout: 45000 });
-    await page.waitForTimeout(isIOS ? 3000 : 1500);
-
-    console.log(`  Page loaded: "${await page.title()}" [${page.url()}]`);
+    let pageLoaded = false;
+    let navError: string | null = null;
+    try {
+      await page.goto(appUrl, { waitUntil: 'load', timeout: 30000 });
+      pageLoaded = true;
+    } catch (e: any) {
+      navError = `load event timed out, trying domcontentloaded...`;
+      console.log(`  ${navError}`);
+      try {
+        await page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        pageLoaded = true;
+      } catch (e2: any) {
+        navError = `Page navigation failed: ${e2.message}`;
+        console.log(`  ${navError}`);
+        // Even if navigation throws, the page might be partially rendered
+        pageLoaded = await page.evaluate(() => {
+          return !!(document.body && document.body.textContent && document.body.textContent.trim().length > 0);
+        }).catch(() => false);
+      }
+    }
+    await page.waitForTimeout(pageLoaded ? 2000 : 500);
+    const title = await page.title().catch(() => '');
+    const url = page.url();
+    console.log(`  Page: "${title}" [${url}] loaded=${pageLoaded}`);
+    if (!pageLoaded && navError) {
+      throw new Error(navError);
+    }
 
     if (instructions) {
       console.log(`  [instructions] Executing: ${instructions}`);
-      const steps = await this.instructor.executeSteps(page, instructions);
-      for (const step of steps) {
-        allInstructionResults!.push(step);
+      try {
+        const steps = await this.instructor.executeSteps(page, instructions, {}, onInstruction, screenshotDir, (file) => {
+          if (onScreenshot) {
+            onScreenshot({ file, path: file, device: 'evidence', browser: 'instruction', viewport: '', state: 'error' });
+          }
+        });
+        if (steps) {
+          for (const step of steps) {
+            allInstructionResults!.push(step);
+          }
+        }
+      } catch (err: any) {
+        console.log(`  [instructions] Stopped at failed step: ${err.message}`);
+        allInstructionResults!.push({ step: 'instructions', status: 'error', error: err.message });
+        const instrErr = new Error(err.message);
+        (instrErr as any).isInstructionError = true;
+        throw instrErr;
       }
-      console.log(`  [instructions] All steps done`);
+      console.log(`  [instructions] Done`);
       const afterUrl = page.url();
       console.log(`  After instructions: "${await page.title()}" [${afterUrl}]`);
     }

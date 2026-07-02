@@ -1,15 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-interface AiStep {
-  action: string;
-  target?: string;
-  text?: string;
-  ms?: number;
-  url?: string;
-  description?: string;
-}
-
 @Injectable()
 export class AiInstructorService {
   private geminiApiKey: string;
@@ -18,7 +9,7 @@ export class AiInstructorService {
     this.geminiApiKey = this.config.get<string>('app.geminiApiKey') || '';
   }
 
-  async parse(instructions: string): Promise<AiStep[] | null> {
+  async reformat(instructions: string): Promise<string | null> {
     if (!this.geminiApiKey) return null;
 
     try {
@@ -26,43 +17,44 @@ export class AiInstructorService {
       const genAI = new GoogleGenerativeAI(this.geminiApiKey);
       const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
-      const prompt = `You convert natural language UI testing instructions into structured steps for Playwright.
+      const prompt = `Convert these UI testing instructions into simple Playwright commands.
 
-Instructions: "${instructions}"
-
-Return a JSON array of steps. Each step must follow this schema:
-{ "action": string, "target"?: string, "text"?: string, "ms"?: number, "url"?: string }
-
-Valid actions and their fields:
-- "navigate": { url: "https://..." }
-- "click": { target: "button text or label" }
-- "type": { text: "value to type", target: "field label or placeholder" }
-- "select": { option: "option text", target: "select label" }
-- "check": { target: "checkbox label" }
-- "uncheck": { target: "checkbox label" }
-- "hover": { target: "element text" }
-- "scroll": { target: "down|up|element text" }
-- "wait": { ms: number }
-- "screenshot": {}
+Instructions:
+${instructions}
 
 Rules:
-- Infer the correct action from natural language. "click login" → click target "Log In"
-- "user: ..." or "email: ..." → type into "Email"
-- "pass:" or "password:" → type into "Password"
-- Email addresses → type into "Email"
-- "try to login" → wait 500ms
-- Split compound instructions into separate steps
-- If unsure, use description field for the raw text
+- Output one command per line
+- Each line must be one of these formats:
+  click "TARGET"
+  type "VALUE" into "FIELD"
+  navigate "URL"
+  wait N
+  scroll down / scroll up / scroll to "TARGET"
+  hover "TARGET"
+  screenshot
 
-Return ONLY the JSON array, no other text. If no steps can be derived, return [].`;
+- For "click" commands: keep ALL words of the button/link name. Examples:
+  "click on Ask AI button" → click "Ask AI"
+  "click on Sign In button in header" → click "Sign In"
+  "click login link" → click "Log In"
+  NEVER drop words from names: "Ask AI" stays "Ask AI", "Sign In" stays "Sign In"
 
-      const genResult = await model.generateContent(prompt);
-      const responseText = genResult.response.text();
-      const match = responseText.match(/\[[\s\S]*\]/);
-      if (!match) return [];
+- For login flows:
+  "click login and try to login with user: X pass: Y" →
+  click "Log In"
+  wait 500
+  type "X" into "Email"
+  type "Y" into "Password"
 
-      const steps: AiStep[] = JSON.parse(match[0]);
-      return steps.filter((s) => s.action && s.action !== 'unknown');
+- Drop validation/review lines about: checking, verifying, ensuring, visibility, viewport, clipping
+- Skip sentences like "check if content is visible" or "should not be clipped"
+- Keep only concrete actions (click, type, navigate, wait, scroll, hover, screenshot)
+
+Output ONLY the commands, one per line. No explanations. If nothing actionable, output nothing.`;
+
+      const result = await model.generateContent(prompt);
+      const output = result.response.text().trim();
+      return output || null;
     } catch (err) {
       console.error(`[AiInstructor] Gemini error: ${err.message}`);
       return null;

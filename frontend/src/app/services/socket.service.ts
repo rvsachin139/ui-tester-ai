@@ -7,6 +7,7 @@ export interface TestProgress {
   phase: string;
   message: string;
   progress?: number;
+  type?: 'info' | 'running' | 'success' | 'error';
 }
 
 export interface TestResult {
