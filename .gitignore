@@ -6,4 +6,6 @@ sessions/
 screenshots/
 reports/
 scripts/stitch-*.json
+scripts/*.mjs
+opencode.jsonc
 .DS_Store

@@ -21,10 +21,10 @@ export class Device {
   @Column()
   height: number;
 
-  @Column({ length: 30, nullable: true })
+  @Column({ type: 'varchar', length: 30, nullable: true })
   os: string | null;
 
-  @Column({ name: 'playwright_device', length: 200, nullable: true })
+  @Column({ type: 'varchar', name: 'playwright_device', length: 200, nullable: true })
   playwrightDevice: string | null;
 
   @Column({ name: 'sort_order', default: 0 })

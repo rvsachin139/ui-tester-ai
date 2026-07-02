@@ -8,6 +8,7 @@ import { ReviewerModule } from './reviewer/reviewer.module';
 import { FixerModule } from './fixer/fixer.module';
 import { InstructorModule } from './instructor/instructor.module';
 import { CliModule } from './cli/cli.module';
+import { TestsModule } from './tests/tests.module';
 import configuration, { databaseConfig } from './config/configuration';
 
 @Module({})
@@ -29,6 +30,7 @@ export class AppModule {
         FixerModule,
         InstructorModule,
         CliModule,
+        TestsModule,
       ],
     };
   }
