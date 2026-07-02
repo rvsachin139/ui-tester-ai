@@ -45,3 +45,20 @@ reports/                ← Generated reports
 When writing or modifying Angular code in `frontend/`, you MUST first read and follow `frontend/ANGULAR_BEST_PRACTICES.md`. This file contains the official Angular style guide rules, signal patterns, template conventions, DI patterns, performance best practices, and a project audit with specific migration targets. All Angular code should conform to these standards before being considered complete.
 
 When writing or modifying NestJS code in `backend/`, follow NestJS modular architecture conventions: feature modules with controllers/services/entities, TypeORM for database access, and class-validator for request validation.
+
+## Skills
+
+Whenever you create a new skill or instruction file anywhere in this project, you MUST add a reference entry in this section pointing to its location and describing when to use it.
+
+- `playwright-instructor` at `.agents/skills/playwright-instructor/` — Load this skill via the skill tool whenever the user gives natural language UI testing/scraping instructions that need conversion to Playwright commands.
+
+## Standing Instructions
+
+These instructions apply to ALL future interactions unless explicitly overridden:
+
+### Dev Server
+- The backend runs via `npm run start:dev` (watch mode) from `backend/` — it auto-reloads on file changes
+- **Never open a new terminal if one is already running.** If a backend terminal is already open, just run `npm run build` — watch mode will pick up the changes automatically
+- Always run `npm run build` from `backend/` after code changes to verify no errors
+- **If port 3000 is already in use (EADDRINUSE): close the old terminal and open a new one.** Press Ctrl+C in the old terminal, or kill the process occupying the port
+- When both backend and frontend work is involved, start both dev servers (only if not already running)

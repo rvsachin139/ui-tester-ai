@@ -131,4 +131,49 @@ export class ApiService {
   cancelSession(sessionId: string): Observable<{ sessionId: string; status: string }> {
     return this.http.delete<{ sessionId: string; status: string }>(`${this.baseUrl}/tests/active/${sessionId}`);
   }
+
+  // ── AI Key management ──
+
+  getModels(): Observable<ModelInfo[]> {
+    return this.http.get<ModelInfo[]>(`${this.baseUrl}/ai-keys/models`);
+  }
+
+  getAiKeys(): Observable<AiKey[]> {
+    return this.http.get<AiKey[]>(`${this.baseUrl}/ai-keys`);
+  }
+
+  createAiKey(data: Partial<AiKey>): Observable<AiKey> {
+    return this.http.post<AiKey>(`${this.baseUrl}/ai-keys`, data);
+  }
+
+  updateAiKey(id: number, data: Partial<AiKey>): Observable<AiKey> {
+    return this.http.patch<AiKey>(`${this.baseUrl}/ai-keys/${id}`, data);
+  }
+
+  deleteAiKey(id: number): Observable<void> {
+    return this.http.delete<void>(`${this.baseUrl}/ai-keys/${id}`);
+  }
+}
+
+export interface ModelInfo {
+  provider: string;
+  model: string;
+  supportsImages: boolean;
+  label: string;
+}
+
+export interface AiKey {
+  id: number;
+  provider: string;
+  model: string;
+  label: string;
+  apiKey: string;
+  supportsImages: boolean;
+  isActive: boolean;
+  usageCount: number;
+  lastError: string | null;
+  lastQuotaAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }

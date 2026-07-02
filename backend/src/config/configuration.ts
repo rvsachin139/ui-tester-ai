@@ -2,7 +2,7 @@ import { registerAs } from '@nestjs/config';
 
 export default registerAs('app', () => ({
   port: parseInt(process.env.APP_PORT || '3000', 10),
-  geminiApiKey: process.env.GEMINI_API_KEY || '',
+
 }));
 
 export const databaseConfig = registerAs('database', () => ({

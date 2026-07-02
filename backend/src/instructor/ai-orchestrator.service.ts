@@ -1,0 +1,79 @@
+import { Injectable } from '@nestjs/common';
+import { AiProviderResult } from './ai-provider.interface';
+import { AiExecutorService } from './ai-executor.service';
+import { AiKeysService } from '../ai-keys/ai-keys.service';
+import { AiKey } from '../ai-keys/ai-key.entity';
+
+@Injectable()
+export class AiOrchestratorService {
+  constructor(
+    private executor: AiExecutorService,
+    private aiKeys: AiKeysService,
+  ) {}
+
+  async reformatForParser(instructions: string): Promise<AiProviderResult> {
+    const activeKeys = await this.getActiveKeys();
+
+    const groups = this.groupKeys(activeKeys);
+
+    for (const [, keys] of groups) {
+      for (const key of keys) {
+        const result = await this.executor.reformat(key, instructions);
+        await this.aiKeys.recordUsage(key.id, result.output ? null : result.reason);
+
+        if (result.output) {
+          return result;
+        }
+
+        const isQuota = /429|quota|rate.?limit|exhausted/i.test(result.reason);
+        if (!isQuota) {
+          break;
+        }
+      }
+    }
+
+    const reasons = activeKeys.map((k) => k.lastError).filter(Boolean).join('; ');
+    return {
+      output: null,
+      reason: reasons
+        ? `All providers failed: ${reasons}`
+        : 'No AI provider returned a result',
+    };
+  }
+
+  async reviewScreenshot(
+    imageBase64: string,
+    mimeType: string,
+    instructions: string,
+  ): Promise<AiProviderResult> {
+    const allKeys = await this.aiKeys.findAll();
+    const imageKeys = allKeys.filter((k) => k.isActive && k.supportsImages);
+
+    for (const key of imageKeys) {
+      try {
+        const result = await this.executor.reviewScreenshot(key, instructions, imageBase64, mimeType);
+        await this.aiKeys.recordUsage(key.id, result.output ? null : result.reason);
+        if (result.output) return result;
+      } catch (err: any) {
+        await this.aiKeys.recordUsage(key.id, err.message);
+      }
+    }
+
+    return { output: null, reason: 'No image-capable AI provider returned a result' };
+  }
+
+  private async getActiveKeys(): Promise<AiKey[]> {
+    const all = await this.aiKeys.findAll();
+    return all.filter((k) => k.isActive);
+  }
+
+  private groupKeys(keys: AiKey[]): Map<string, AiKey[]> {
+    const groups = new Map<string, AiKey[]>();
+    for (const key of keys) {
+      const g = `${key.provider}:${key.model}`;
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g)!.push(key);
+    }
+    return groups;
+  }
+}

@@ -10,6 +10,7 @@ import { InstructorModule } from './instructor/instructor.module';
 import { CliModule } from './cli/cli.module';
 import { TestsModule } from './tests/tests.module';
 import { EventsModule } from './events/events.module';
+import { AiKeysModule } from './ai-keys/ai-keys.module';
 import configuration, { databaseConfig } from './config/configuration';
 
 @Module({})
@@ -33,6 +34,7 @@ export class AppModule {
         CliModule,
         TestsModule,
         EventsModule,
+        AiKeysModule,
       ],
     };
   }

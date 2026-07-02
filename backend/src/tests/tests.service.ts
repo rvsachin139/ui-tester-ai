@@ -153,7 +153,7 @@ export class TestsService {
         });
       },
       onInstruction: (r) => {
-        const type = r.status === 'error' ? 'error' : 'success';
+        const type = r.status === 'error' ? 'error' : r.status === 'info' ? 'info' : 'success';
         let msg = `Step: ${r.step}`;
         if (r.status === 'done' && r.result) msg += ` — ${r.result}`;
         else if (r.status === 'error') {

@@ -1,7 +1,7 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
-import { ApiService, TestProfile, ReviewReport, Issue } from '../services/api.service';
+import { ApiService, TestProfile, ReviewReport, Issue, AiKey, ModelInfo } from '../services/api.service';
 import { SocketService, TestProgress, TestResult, TestError, ScreenshotData, SessionEvent } from '../services/socket.service';
 import { Subscription } from 'rxjs';
 
@@ -91,6 +91,7 @@ interface LogEntry {
           </button>
 
           <button class="btn-reset" (click)="reset()" [disabled]="isRunning">Reset</button>
+          <button class="btn-settings" (click)="openSettings()">⚙ Settings</button>
 
           <div class="sessions-section">
             <div class="sessions-header" (click)="showActiveSessions = !showActiveSessions">
@@ -244,6 +245,106 @@ interface LogEntry {
       </div>
     }
 
+    @if (showSettings) {
+      <div class="modal-backdrop" (click)="closeSettings()">
+        <div class="modal-content modal-wide" (click)="$event.stopPropagation()">
+          <div class="modal-header">
+            <h3>AI Provider Settings</h3>
+            <button class="modal-close" (click)="closeSettings()">✕</button>
+          </div>
+
+          <div class="modal-body">
+            @if (aiModels.length === 0) {
+              <div class="loading-hint">Loading models...</div>
+            }
+
+            <!-- Existing keys -->
+            @if (aiKeys.length > 0) {
+              <table class="keys-table">
+                <thead>
+                  <tr>
+                    <th>Label</th>
+                    <th>Provider</th>
+                    <th>Model</th>
+                    <th>Vision</th>
+                    <th>Active</th>
+                    <th>Usage</th>
+                    <th>Last Error</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (k of aiKeys; track k.id) {
+                    <tr>
+                      <td>{{ k.label }}</td>
+                      <td>{{ k.provider }}</td>
+                      <td>{{ k.model }}</td>
+                      <td>
+                        @if (k.supportsImages) {
+                          <span class="badge-yes">✓</span>
+                        } @else {
+                          <span class="badge-no">—</span>
+                        }
+                      </td>
+                      <td>
+                        <label class="toggle-label">
+                          <input type="checkbox" [checked]="k.isActive" (change)="toggleActive(k)" />
+                          <span class="toggle-slider"></span>
+                        </label>
+                      </td>
+                      <td class="num-cell">{{ k.usageCount }}</td>
+                      <td class="error-cell" [title]="k.lastError || ''">
+                        @if (k.lastQuotaAt) {
+                          <span class="quota-warn">⚠ Quota</span>
+                        } @else if (k.lastError) {
+                          <span class="err-text">Error</span>
+                        } @else {
+                          <span class="ok-text">OK</span>
+                        }
+                      </td>
+                      <td>
+                        <button class="btn-icon" (click)="deleteKey(k)" title="Delete">✕</button>
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            } @else {
+              <div class="empty-hint">No API keys configured.</div>
+            }
+
+            <!-- Add key form -->
+              <div class="add-key-form">
+                <h4>Add API Key</h4>
+                <div class="form-row">
+                  <input class="input-field form-select" type="text" placeholder="Provider (e.g. gemini, groq, openai, anthropic...)" [(ngModel)]="newKey.provider" (ngModelChange)="onProviderChange()" list="provider-list" />
+                  <datalist id="provider-list">
+                    @for (p of providers; track p) {
+                      <option [value]="p">{{ p }}</option>
+                    }
+                  </datalist>
+                  <input class="input-field form-select" type="text" placeholder="Model (e.g. gemini-2.0-flash, gpt-4o...)" [(ngModel)]="newKey.model" (ngModelChange)="onModelChange()" list="model-list" />
+                  <datalist id="model-list">
+                    @for (m of filteredModels; track m.model) {
+                      <option [value]="m.model">{{ m.label }}</option>
+                    }
+                  </datalist>
+                  <input class="input-field" type="text" placeholder="Label (e.g. My Gemini Key)" [(ngModel)]="newKey.label" />
+                </div>
+                <div class="form-row">
+                  <input class="input-field form-api-key" type="password" placeholder="API Key" [(ngModel)]="newKey.apiKey" />
+                  <label class="vision-toggle">
+                    <input type="checkbox" [(ngModel)]="newKey.supportsImages" />
+                    <span class="toggle-label-text">Supports images (vision)</span>
+                  </label>
+                </div>
+                <button class="btn-add-key" (click)="saveNewKey()" [disabled]="!canAddKey()">Add Key</button>
+              </div>
+          </div>
+        </div>
+      </div>
+    }
+
     <footer class="app-footer">
       <span>&copy; {{ currentYear }} UI Tester AI</span>
       <div class="footer-links">
@@ -360,6 +461,15 @@ interface LogEntry {
     }
     .btn-reset:hover:not(:disabled) { color: #e8e9ed; border-color: #3a3c42; }
     .btn-reset:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .btn-settings {
+      width: 100%; padding: 8px; margin-top: 6px;
+      background: transparent; color: #6b6d76;
+      border: 1px solid #2a2b30; border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-settings:hover { color: #e8e9ed; border-color: #3a3c42; }
 
     .sessions-section {
       margin-top: 16px; padding-top: 16px;
@@ -543,6 +653,98 @@ interface LogEntry {
       100% { transform: translateX(400%); }
     }
 
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.7);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .modal-content {
+      background: #121317; border: 1px solid #2a2b30;
+      border-radius: 10px; width: 90%; max-width: 900px;
+      max-height: 85vh; display: flex; flex-direction: column;
+    }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 24px; border-bottom: 1px solid #1e1f24;
+    }
+    .modal-header h3 {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px; color: #e8e9ed; margin: 0;
+    }
+    .modal-close {
+      background: none; border: none; color: #6b6d76;
+      font-size: 18px; cursor: pointer;
+    }
+    .modal-close:hover { color: #e8e9ed; }
+    .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+
+    .keys-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 20px; }
+    .keys-table th {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+      color: #6b6d76; text-align: left;
+      padding: 8px 10px; border-bottom: 1px solid #1e1f24;
+    }
+    .keys-table td { padding: 8px 10px; color: #e8e9ed; border-bottom: 1px solid #1e1f24; }
+    .keys-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .num-cell { font-family: 'JetBrains Mono', monospace; text-align: center; }
+    .error-cell { font-size: 11px; }
+    .badge-yes { color: #4caf7d; font-weight: bold; }
+    .badge-no { color: #3a3c42; }
+    .quota-warn { color: #c8a45c; font-weight: 600; }
+    .err-text { color: #e45a5a; }
+    .ok-text { color: #4caf7d; }
+    .btn-icon {
+      background: none; border: 1px solid #2a2b30;
+      color: #6b6d76; width: 26px; height: 26px;
+      border-radius: 4px; cursor: pointer; font-size: 12px;
+    }
+    .btn-icon:hover { color: #e45a5a; border-color: #e45a5a; }
+
+    .toggle-label { display: inline-flex; align-items: center; cursor: pointer; gap: 6px; }
+    .toggle-label input { display: none; }
+    .toggle-slider {
+      width: 32px; height: 18px; background: #2a2b30;
+      border-radius: 9px; position: relative; transition: 0.2s;
+    }
+    .toggle-slider::after {
+      content: ''; position: absolute; top: 2px; left: 2px;
+      width: 14px; height: 14px; background: #6b6d76;
+      border-radius: 50%; transition: 0.2s;
+    }
+    .toggle-label input:checked + .toggle-slider { background: #c8a45c; }
+    .toggle-label input:checked + .toggle-slider::after { left: 16px; background: #0e0f12; }
+
+    .empty-hint { color: #6b6d76; font-style: italic; margin-bottom: 20px; }
+
+    .add-key-form {
+      border-top: 1px solid #1e1f24; padding-top: 16px;
+    }
+    .add-key-form h4 {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; color: #9a9ba3; margin: 0 0 12px;
+    }
+    .form-row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .form-select { flex: 1; min-width: 160px; }
+    .form-api-key { flex: 2; min-width: 200px; }
+    .form-ro { flex: 1; min-width: 140px; opacity: 0.6; }
+    .btn-add-key {
+      padding: 8px 20px;
+      background: #c8a45c; color: #0e0f12;
+      border: none; border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .btn-add-key:hover:not(:disabled) { background: #dbb96e; }
+    .btn-add-key:disabled { opacity: 0.4; cursor: not-allowed; }
+    .vision-toggle {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px; cursor: pointer;
+      color: #9a9ba3; font-size: 12px;
+    }
+    .vision-toggle input { width: 16px; height: 16px; accent-color: #c8a45c; }
+    .toggle-label-text { color: #e8e9ed; }
+
     .gallery-container { flex: 1; overflow-y: auto; padding-bottom: 12px; }
     .gallery-container::-webkit-scrollbar { width: 4px; }
     .gallery-container::-webkit-scrollbar-track { background: transparent; }
@@ -663,7 +865,93 @@ export class DashboardComponent implements OnInit, OnDestroy {
   private testTimeout: ReturnType<typeof setTimeout> | null = null;
   private currentSessionId: string | null = null;
 
+  // ── Settings modal state ──
+  showSettings = false;
+  aiKeys: AiKey[] = [];
+  aiModels: ModelInfo[] = [];
+  newKey: Partial<AiKey> & { supportsImages: boolean } = { provider: '', model: '', label: '', apiKey: '', supportsImages: false };
+  providers: string[] = [];
+  filteredModels: ModelInfo[] = [];
+
   constructor(private api: ApiService, private socket: SocketService) {}
+
+  // ── Settings methods ──
+  openSettings() {
+    this.showSettings = true;
+    this.loadAiKeys();
+    this.api.getModels().subscribe((m) => {
+      this.aiModels = m;
+      this.providers = [...new Set(m.map(mm => mm.provider))];
+    });
+  }
+
+  closeSettings() {
+    this.showSettings = false;
+  }
+
+  loadAiKeys() {
+    this.api.getAiKeys().subscribe((k) => this.aiKeys = k);
+  }
+
+  onProviderChange() {
+    this.filteredModels = this.aiModels.filter((m) =>
+      m.provider.toLowerCase() === (this.newKey.provider || '').toLowerCase()
+    );
+    // Don't clear model — user may be typing custom
+    const m = this.filteredModels.find(mm => mm.model === this.newKey.model);
+    if (!m) {
+      // Custom model — keep user's value, don't auto-toggle images
+    }
+  }
+
+  onModelChange() {
+    const m = this.aiModels.find(mm => mm.model === this.newKey.model);
+    if (m) {
+      this.newKey.supportsImages = m.supportsImages;
+    }
+    // If custom model, user sets supportsImages manually via checkbox
+  }
+
+  canAddKey(): boolean {
+    return !!this.newKey.provider && !!this.newKey.model && !!this.newKey.label && !!this.newKey.apiKey;
+  }
+
+  saveNewKey() {
+    if (!this.canAddKey()) return;
+    const sub = this.api.createAiKey({
+      provider: this.newKey.provider!,
+      model: this.newKey.model!,
+      label: this.newKey.label!,
+      apiKey: this.newKey.apiKey!,
+      supportsImages: this.newKey.supportsImages,
+      isActive: true,
+    } as any).subscribe({
+      next: () => {
+        this.loadAiKeys();
+        this.newKey = { provider: '', model: '', label: '', apiKey: '', supportsImages: false };
+        this.filteredModels = [];
+      },
+      error: (err) => this.addLog(`Failed to save key: ${err.message}`, 'error'),
+    });
+    this.subs.push(sub);
+  }
+
+  deleteKey(k: AiKey) {
+    if (!confirm(`Delete key "${k.label}"?`)) return;
+    const sub = this.api.deleteAiKey(k.id).subscribe({
+      next: () => this.loadAiKeys(),
+      error: (err) => this.addLog(`Failed to delete key: ${err.message}`, 'error'),
+    });
+    this.subs.push(sub);
+  }
+
+  toggleActive(k: AiKey) {
+    const sub = this.api.updateAiKey(k.id, { isActive: !k.isActive }).subscribe({
+      next: () => this.loadAiKeys(),
+      error: (err) => this.addLog(`Failed to update key: ${err.message}`, 'error'),
+    });
+    this.subs.push(sub);
+  }
 
   ngOnInit() {
     this.loadSavedState();

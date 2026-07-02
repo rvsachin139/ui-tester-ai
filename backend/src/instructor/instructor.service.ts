@@ -3,7 +3,7 @@ import { AiInstructorService } from './ai-instructor.service';
 
 interface StepResult {
   step: string;
-  status: 'done' | 'error';
+  status: 'done' | 'error' | 'info';
   result?: string;
   error?: string;
   evidence?: string;
@@ -26,20 +26,24 @@ export class InstructorService {
 
     console.log(`[Instructor] Input: ${instructions}`);
 
-    let reformatted = await this.aiInstructor.reformat(instructions);
+    const { output: reformatted, reason: aiReason } = await this.aiInstructor.reformat(instructions);
     let lines: string[] = [];
 
     if (reformatted) {
-      console.log(`[Instructor] AI reformatted: ${reformatted}`);
       lines = reformatted.split('\n').map((l) => l.trim()).filter(Boolean);
+      if (onStep) onStep({ step: `Parser: ${aiReason}`, status: 'done', result: `Generated ${lines.length} command(s)` });
     } else {
-      console.log(`[Instructor] AI returned null, using regex fallback`);
+      console.log(`[Instructor] ${aiReason}, using regex fallback`);
+      if (onStep) onStep({ step: `Parser: ${aiReason}`, status: 'info' });
     }
 
     if (lines.length === 0) {
       lines = this.parseRawInstructions(instructions);
       if (lines.length > 0) {
         console.log(`[Instructor] Regex fallback produced: ${JSON.stringify(lines)}`);
+        if (onStep) onStep({ step: `Parser: Regex fallback`, status: 'done', result: `Generated ${lines.length} command(s)` });
+      } else {
+        if (onStep) onStep({ step: `Parser: Regex fallback`, status: 'error', error: 'Could not parse any commands' });
       }
     }
 
@@ -258,11 +262,23 @@ export class InstructorService {
       for (const t of this.extractClicks(before)) {
         lines.push(`click "${t}"`);
       }
-      lines.push(`type "${loginMatch[1]}" into "Email"`);
-      lines.push(`type "${loginMatch[2]}" into "Password"`);
+      // Determine field labels from instructions
+      const emailLabel = /username/i.test(lower) ? 'Username' : 'Email';
+      const passLabel = /pass/i.test(lower) ? 'Password' : 'Password';
+      lines.push(`type "${loginMatch[1]}" into "${emailLabel}"`);
+      lines.push(`type "${loginMatch[2]}" into "${passLabel}"`);
       const idxPass = lower.indexOf('pass');
       const after = idxPass >= 4 ? text.slice(idxPass + 4) : text;
-      for (const t of this.extractClicks(after)) {
+      // Check if any login-submit click exists in the after-text
+      const afterClicks = this.extractClicks(after);
+      const hasSubmit = afterClicks.some((t) => /log\s*in|sign\s*in/i.test(t));
+      if (!hasSubmit && /(?:once|after|when)\s+log/i.test(text)) {
+        // Instructions imply a submit is needed but none was found — wait briefly then try Log In
+        lines.push('wait 1');
+        lines.push('click "Log In"');
+        lines.push('wait 3');
+      }
+      for (const t of afterClicks) {
         if (!/(log|sign)\s*(in|on)/i.test(t)) {
           lines.push(`click "${t}"`);
         }
