@@ -106,12 +106,13 @@ export class ApiService {
     return this.http.get<Device[]>(`${this.baseUrl}/devices/set/${setKey}`);
   }
 
-  runTest(url: string, profileId?: number, instructions?: string, projectPath?: string): Observable<TestRunResponse> {
+  runTest(url: string, profileId?: number, instructions?: string, projectPath?: string, socketId?: string): Observable<{ sessionId: string; status: string }> {
     const body: TestRunRequest = { url };
     if (profileId) body.profileId = profileId;
     if (instructions) body.instructions = instructions;
     if (projectPath) body.projectPath = projectPath;
-    return this.http.post<TestRunResponse>(`${this.baseUrl}/tests/run`, body);
+    if (socketId) (body as any).socketId = socketId;
+    return this.http.post<{ sessionId: string; status: string }>(`${this.baseUrl}/tests/run`, body);
   }
 
   getSessions(): Observable<Session[]> {

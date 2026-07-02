@@ -39,3 +39,9 @@ backend/                ← Node.js API + Playwright engine
 sessions/               ← Per-run screenshot + report folders
 reports/                ← Generated reports
 ```
+
+## Coding Standards
+
+When writing or modifying Angular code in `frontend/`, you MUST first read and follow `frontend/ANGULAR_BEST_PRACTICES.md`. This file contains the official Angular style guide rules, signal patterns, template conventions, DI patterns, performance best practices, and a project audit with specific migration targets. All Angular code should conform to these standards before being considered complete.
+
+When writing or modifying NestJS code in `backend/`, follow NestJS modular architecture conventions: feature modules with controllers/services/entities, TypeORM for database access, and class-validator for request validation.

@@ -2,6 +2,7 @@ import { Component, OnInit, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
 import { ApiService, TestProfile, ReviewReport, Issue } from '../services/api.service';
+import { SocketService, TestProgress, TestResult, TestError } from '../services/socket.service';
 import { Subscription } from 'rxjs';
 
 interface LogEntry {
@@ -391,11 +392,14 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   private subs: Subscription[] = [];
 
-  constructor(private api: ApiService) {}
+  constructor(private api: ApiService, private socket: SocketService) {}
 
   ngOnInit() {
     this.loadSavedState();
     this.loadProfiles();
+    this.socket.waitForConnection().then(() => {
+      this.addLog('Real-time connection established.', 'info');
+    });
     this.addLog('Dashboard initialized. Ready to run tests.', 'info');
   }
 
@@ -440,7 +444,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.subs.push(sub);
   }
 
-  launchTest() {
+  async launchTest() {
     if (!this.url.trim() || this.isRunning) return;
 
     this.saveState();
@@ -459,47 +463,61 @@ export class DashboardComponent implements OnInit, OnDestroy {
       this.addLog(`Profile selected: ${profile.name}`, 'info');
     }
 
+    const progressSub = this.socket.onProgress().subscribe((data: TestProgress) => {
+      if (data.progress != null) this.stepsCompleted = data.progress;
+      this.addLog(data.message, 'running');
+    });
+
+    const completeSub = this.socket.onComplete().subscribe((data: TestResult) => {
+      const result = data.result as any;
+      if (result.report) {
+        const r: ReviewReport = result.report;
+        this.score = r.overallScore;
+        this.issuesCount = r.issues.length;
+        this.stepsCompleted = r.details.totalScreenshots;
+
+        this.addLog(`Test completed for ${r.appUrl}`, 'success');
+        this.addLog(`Score: ${r.overallScore}/100 | Issues: ${r.issues.length} | Screenshots: ${r.details.totalScreenshots}`, 'info');
+        this.addLog(`Browsers tested: ${r.details.browsers.join(', ')}`, 'info');
+        this.addLog(`Devices tested: ${r.details.devices.join(', ')}`, 'info');
+
+        if (r.issues.length > 0) {
+          for (const issue of r.issues) {
+            this.addLog(`[${issue.severity.toUpperCase()}] ${issue.title} — ${issue.category}`, 'error');
+            this.addLog(`  ${issue.description}`, 'error');
+            if (issue.suggestion) {
+              this.addLog(`  Fix: ${issue.suggestion}`, 'info');
+            }
+          }
+          this.addLog(`${r.issues.length} issue(s) found.`, 'error');
+        } else {
+          this.addLog('No issues found. The UI looks clean!', 'success');
+        }
+        this.addLog(`Summary: ${r.summary}`, 'info');
+      } else {
+        this.addLog(`Test completed: ${result.summary || 'No report data'}`, 'info');
+      }
+      this.isRunning = false;
+    });
+
+    const errorSub = this.socket.onError().subscribe((data: TestError) => {
+      this.addLog(`Error: ${data.error}`, 'error');
+      this.isRunning = false;
+    });
+
+    this.subs.push(progressSub, completeSub, errorSub);
+
+    const socketId = await this.socket.waitForConnection();
+
     const sub = this.api.runTest(
       this.url.trim(),
       this.selectedProfileId ?? undefined,
-      this.instructions || undefined
+      this.instructions || undefined,
+      undefined,
+      socketId
     ).subscribe({
-      next: (response) => {
-        if (response.success && response.report) {
-          const r = response.report;
-          this.score = r.overallScore;
-          this.issuesCount = r.issues.length;
-          this.stepsCompleted = r.details.totalScreenshots;
-
-          this.addLog(`Test completed for ${r.appUrl}`, 'success');
-          this.addLog(`Score: ${r.overallScore}/100 | Issues: ${r.issues.length} | Screenshots: ${r.details.totalScreenshots}`, 'info');
-
-          this.addLog(`Browsers tested: ${r.details.browsers.join(', ')}`, 'info');
-          this.addLog(`Devices tested: ${r.details.devices.join(', ')}`, 'info');
-
-          if (r.issues.length > 0) {
-            for (const issue of r.issues) {
-              this.addLog(`[${issue.severity.toUpperCase()}] ${issue.title} — ${issue.category}`, 'error');
-              this.addLog(`  ${issue.description}`, 'error');
-              if (issue.suggestion) {
-                this.addLog(`  Fix: ${issue.suggestion}`, 'info');
-              }
-            }
-            this.addLog(`${r.issues.length} issue(s) found.`, 'error');
-          } else {
-            this.addLog('No issues found. The UI looks clean!', 'success');
-          }
-
-          this.addLog(`Summary: ${r.summary}`, 'info');
-        } else if (response.message) {
-          this.addLog(`Test completed: ${response.message}`, 'info');
-        } else {
-          this.addLog('Test completed with no report data.', 'info');
-        }
-        this.isRunning = false;
-      },
       error: (err) => {
-        this.addLog(`Error running test: ${err.message || 'Unknown error'}`, 'error');
+        this.addLog(`Failed to start test: ${err.message || 'Unknown error'}`, 'error');
         this.isRunning = false;
       }
     });

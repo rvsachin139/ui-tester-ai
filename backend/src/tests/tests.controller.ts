@@ -6,6 +6,7 @@ class RunTestDto {
   profileId?: number;
   instructions?: string;
   projectPath?: string;
+  socketId?: string;
 }
 
 @Controller('tests')
@@ -20,6 +21,7 @@ export class TestsController {
       profileId: dto.profileId,
       instructions: dto.instructions,
       projectPath: dto.projectPath,
+      socketId: dto.socketId,
     });
   }
 

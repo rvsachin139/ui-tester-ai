@@ -2,13 +2,13 @@
 
 ## Project Overview
 
-A multi-agent UI testing automation system that uses Playwright for screenshots, AI vision (Gemini) for UX review, and DeepSeek for code fixes. Supports desktop browsers, iOS/iPad emulation, and a MySQL-backed device/browser configuration database.
+A multi-agent UI testing automation system — 3 AI agents orchestrated to capture Playwright screenshots, review them for UX bugs via vision AI, and apply code fixes. Backend is **NestJS** (TypeScript + TypeORM/MySQL). Frontend is **Angular 19** with real-time dashboard.
 
-Built with **NestJS** (TypeScript) on the backend. A legacy Node.js/Express version exists in `backend-legacy/`.
+**GitHub**: https://github.com/rvsachin139/ui-tester-ai
 
 ---
 
-## NestJS Backend Architecture
+## Architecture
 
 ```
 ui-tester-ai/
@@ -16,7 +16,7 @@ ui-tester-ai/
 ├── backend/                         # NestJS API + Playwright engine
 │   ├── src/
 │   │   ├── main.ts                  # Bootstrap: global prefix `/api`, CORS, ValidationPipe
-│   │   ├── app.module.ts            # Root module — dynamic forRoot() pattern
+│   │   ├── app.module.ts            # Root module
 │   │   │
 │   │   ├── config/
 │   │   │   ├── configuration.ts     # NestJS ConfigModule — app & database configs
@@ -44,59 +44,65 @@ ui-tester-ai/
 │   │   │   └── dto/
 │   │   │       └── create-profile.dto.ts
 │   │   │
+│   │   ├── tests/                   # Tests controller/service — orchestrates full pipeline
+│   │   │   ├── tests.controller.ts  # POST /api/tests/run, GET /api/tests/sessions
+│   │   │   ├── tests.service.ts     # Orchestrates Tester → Reviewer → Fixer
+│   │   │   └── tests.module.ts
+│   │   │
 │   │   ├── tester/                  # Agent 1: Playwright screenshot engine
 │   │   │   └── tester.service.ts
 │   │   │
 │   │   ├── reviewer/                # Agent 2: Gemini vision + rule-based UX review
 │   │   │   └── reviewer.service.ts
 │   │   │
-│   │   ├── fixer/                   # Agent 3: Source-code fixer (CSS, accessibility, meta)
+│   │   ├── fixer/                   # Agent 3: Source-code fixer (CSS, a11y, meta)
 │   │   │   └── fixer.service.ts
 │   │   │
 │   │   ├── instructor/              # Natural language → Playwright action parser
 │   │   │   └── instructor.service.ts
 │   │   │
-│   │   ├── cli/                     # CLI runner + session management
-│   │   │   ├── cli.service.ts       # Orchestrates the 3-agent pipeline
+│   │   ├── cli/                     # Legacy CLI runner + session management
+│   │   │   ├── cli.service.ts
 │   │   │   ├── cli.module.ts
-│   │   │   ├── runner.ts            # CLI entry: node dist/cli/runner.js --url <url>
-│   │   │   └── session-utils.ts     # Session folder creation & cleanup
+│   │   │   ├── runner.ts
+│   │   │   └── session-utils.ts
 │   │   │
-│   │   ├── common/                  # (reserved for shared guards, interceptors, filters)
-│   │   └── sessions/                # (reserved for session entity/repository)
+│   │   └── sessions/                # (reserved for session entity)
 │   │
-│   ├── scripts/                     # SQL scripts for DB setup
+│   ├── scripts/                     # SQL seed scripts
 │   ├── dist/                        # Compiled output
+│   ├── .env                         # MySQL credentials
 │   ├── nest-cli.json
 │   ├── tsconfig.json
-│   ├── .env / .env.test
-│   └── package.json                 # NestJS 11, TypeORM, Playwright, class-validator
+│   └── package.json
 │
-├── backend-legacy/                  # Previous Node.js/Express version (preserved)
-│   ├── orchestrator.js              # Entry point — interactive menu or batch mode
-│   ├── orchestrator-batch.js
-│   ├── interactive-cli.js
-│   ├── config.json / credentials.json
-│   ├── agents/                      # Agent JS files (tester, reviewer, fixer, instructor)
-│   ├── utils/
-│   └── scripts/
+├── frontend/                        # Angular 19 dashboard
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── dashboard/           # Main dashboard component
+│   │   │   │   └── dashboard.component.ts
+│   │   │   ├── services/
+│   │   │   │   └── api.service.ts   # typed HTTP client
+│   │   │   ├── app.component.ts
+│   │   │   └── app.config.ts
+│   │   ├── index.html
+│   │   ├── main.ts
+│   │   └── styles.css
+│   ├── package.json
+│   ├── angular.json
+│   └── tsconfig.json
 │
-├── frontend/                        # (planned) Angular web app
-│   └── (to be scaffolded)
+├── .agents/agents/                  # AI-tool-agnostic agent definitions
+│   ├── tester-agent.md
+│   ├── reviewer-agent.md
+│   └── fixer-agent.md
 │
-├── .agents/                         # AI-tool-agnostic agent definitions
-│   └── agents/
-│       ├── tester-agent.md
-│       ├── reviewer-agent.md
-│       └── fixer-agent.md
-│
-├── AGENTS.md                        # Root-level entrypoint referencing agent definitions
+├── AGENTS.md                        # Root-level entrypoint
 ├── sessions/                        # Timestamped run folders
-│   └── {timestamp}-{name}/
+│   └── {timestamp}/
 │       ├── screenshots/
 │       └── reports/
-├── screenshots/                     # Generated screenshots
-├── reports/                         # Generated reports
+├── .gitignore
 └── PROJECT_SUMMARY.md
 ```
 
@@ -104,13 +110,13 @@ ui-tester-ai/
 
 ## Three Agents
 
-| Agent | Role | Model | NestJS Service |
-|-------|------|-------|----------------|
-| **Agent 1 — Tester** | Takes screenshots across devices × browsers × states | Playwright | `tester.service.ts` |
-| **Agent 2 — Reviewer** | Analyzes screenshots for UX bugs using Gemini vision | Gemini 2.0 Flash | `reviewer.service.ts` |
+| Agent | Role | Model | Service |
+|-------|------|-------|---------|
+| **Agent 1 — Tester** | Playwright screenshots across devices × browsers × states | Playwright | `tester.service.ts` |
+| **Agent 2 — Reviewer** | Analyzes screenshots for UX bugs via vision AI | Gemini 2.0 Flash / rule-based fallback | `reviewer.service.ts` |
 | **Agent 3 — Fixer** | Applies CSS/code fixes in project directory | Rule-based | `fixer.service.ts` |
 
-### Workflow (orchestrated by `cli.service.ts`)
+### Workflow
 
 ```
 1. Tester.run(options)  → screenshots[]
@@ -122,145 +128,100 @@ Loops up to `maxRetries` (default 3) — if Reviewer finds issues and Fixer appl
 
 ---
 
-## Key Features Built
+## Entry Points
 
-### 1. Multi-Device Screenshots (`tester.service.ts`)
-- **Dynamic device/browser config** — fetches from MySQL via Devices API
-- **5 desktop/tablet/mobile viewports** (1920×1080, 1440×900, 768×1024, 430×932, 375×812)
-- **3 browsers**: Chromium, Firefox, WebKit
-- **iOS/iPad emulation** via Playwright device descriptors — sets real user agent, DPR, touch events, isMobile flag
-- **States per device**: initial load, scrolled, rotated (mobile only), fullpage
-
-### 2. UX Review (`reviewer.service.ts`)
-- **Gemini vision**: Sends screenshots + prompt to Gemini 2.0 Flash for AI-powered review
-- **Fallback**: Rule-based analysis when no Gemini key is provided
-- **Checklist**: layout-css, responsive, typography, assets, accessibility, cross-browser, interaction
-- **iOS-specific checks**: safe areas, touch targets (44pt), -webkit- prefixes, viewport meta
-- **Output**: Score (0-100), issue list with severity, JSON + Markdown reports
-
-### 3. Code Fixer (`fixer.service.ts`)
-- Reads project source files and applies targeted CSS/accessibility fixes
-- Handles iOS-specific categories: ios-safari, ios-notch, ios-touch, ios-viewport
-- Currently marks complex fixes for human review (safety-first approach)
-
-### 4. Instruction Engine (`instructor.service.ts`)
-Parses natural language into Playwright actions:
-
-| Instruction | Example | Action |
-|------------|---------|--------|
-| Navigate | `Go to https://example.com/login` | `page.goto()` |
-| Login | `Login with username admin and password pass123` | Auto-finds fields, fills, submits |
-| Click | `Click on "Products"` | Tries button, link, text, role, selector |
-| Type | `Type "hello" into the search box` | Finds input by placeholder/label/name |
-| Select | `Select "Premium" from the tier dropdown` | `page.selectOption()` |
-| Check/Uncheck | `Check the "Agree" checkbox` | `page.check()` |
-| Hover | `Hover over the menu` | `page.hover()` |
-| Scroll | `Scroll down` / `Scroll to "Footer"` | `window.scrollTo()` |
-| Wait | `Wait for 3 seconds` | `page.waitForTimeout()` |
-| Screenshot | `Take a screenshot` | `page.screenshot()` |
-
-### 5. Database-Driven Device Configuration (MySQL via TypeORM)
-
-Tables:
-
-| Table | Purpose |
-|---|---|
-| `devices` | All devices with `set_key` column ('desktop'/'tablet'/'mobile') |
-| `device_browsers` | Available browsers per device + default flag |
-| `test_profiles` | Named reusable test configurations |
-| `test_profile_combos` | Device × browser picks for each profile |
+| Entry Point | Purpose | Port |
+|-------------|---------|------|
+| **`backend/src/main.ts`** | NestJS API server | `:3000` |
+| **`frontend/`** | Angular dev server | `:4200` |
+| **`backend/src/cli/runner.ts`** | Headless CLI runner | — |
 
 ---
 
-## REST API — Frontend Consumption Guide
+## REST API
 
-All endpoints are prefixed with `/api` and return JSON. CORS is enabled. Validation uses `class-validator` with `ValidationPipe` (transform + whitelist).
+All endpoints prefixed with `/api`. CORS enabled.
 
-### Devices API (`/api/devices`)
+### Tests API
 
-| Method | Endpoint | Description | Frontend Use |
-|--------|----------|-------------|--------------|
-| `GET` | `/api/devices/sets` | List device sets (e.g. `["desktop","tablet","mobile"]`) | Populate tabs/filters for device selection |
-| `GET` | `/api/devices/set/:setKey` | Get all devices in a set with their browsers | Device selection checklist/accordion |
-| `GET` | `/api/devices/:id` | Get single device details | Device info panel |
-| `POST` | `/api/devices` | Create a new device | Admin device management UI |
-| `DELETE` | `/api/devices/:id` | Delete a device | Admin device removal |
-| `GET` | `/api/devices/:id/browsers` | Get browsers assigned to a device | Show browser toggles per device |
-| `POST` | `/api/devices/:id/browsers` | Assign a browser to device | Add browser toggle |
-| `DELETE` | `/api/devices/:id/browsers/:browserKey` | Remove a browser assignment | Remove browser toggle |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/tests/run` | Run a test — `{ url, profileId, instructions? }` |
+| `GET` | `/api/tests/sessions` | List past sessions |
+| `GET` | `/api/tests/sessions/:id` | Get session detail + screenshots + report |
 
-### Profiles API (`/api/profiles`)
+### Devices API
 
-| Method | Endpoint | Description | Frontend Use |
-|--------|----------|-------------|--------------|
-| `GET` | `/api/profiles` | List all test profiles | Profile selection dropdown/cards |
-| `GET` | `/api/profiles/:id` | Get profile with associated device×browser combos | Load saved configuration |
-| `POST` | `/api/profiles` | Create a new profile with combos | "Save as profile" feature |
-| `DELETE` | `/api/profiles/:id` | Delete a profile | Profile management UI |
-| `GET` | `/api/profiles/:id/combos` | Get device×browser combos for a profile | Resolve selected profile into test config |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/devices/sets` | List device set keys |
+| `GET` | `/api/devices/set/:setKey` | Get devices in a set with browsers |
+| `GET` | `/api/devices/:id` | Single device details |
+| `POST` | `/api/devices` | Create device |
+| `DELETE` | `/api/devices/:id` | Delete device |
 
-### Frontend Integration Example
+### Profiles API
 
-```
-[Frontend App]
-     │
-     ├─ GET  /api/devices/sets          ──→ Show tabs: Desktop / Tablet / Mobile
-     ├─ GET  /api/devices/set/desktop   ──→ Render device cards with browser checkboxes
-     │
-     ├─ User selects devices + browsers
-     │     │
-     │     ├─ POST /api/profiles          ──→ Save as named profile
-     │     └─ (or use inline selection)   ──→ Trigger test run via backend CLI
-     │
-     └─ GET  /api/profiles              ──→ Load saved profiles for quick re-run
-```
-
-**Request flow**:
-1. Frontend fetches device sets → displays categorized device picker
-2. User picks devices × browsers (or loads a saved profile)
-3. Frontend sends the config to the backend to trigger a test run
-4. Backend runs Tester → Reviewer → Fixer pipeline
-5. Results (screenshots + review report) are served from the session folder
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/profiles` | List test profiles |
+| `GET` | `/api/profiles/:id` | Profile with device×browser combos |
+| `POST` | `/api/profiles` | Create profile with combos |
+| `DELETE` | `/api/profiles/:id` | Delete profile |
+| `GET` | `/api/profiles/:id/combos` | Get combos for a profile |
 
 ---
 
-## CLI Usage (NestJS)
+## Dashboard Features
+
+- **URL input** — target site to test, auto-saved on change
+- **Profile selector** — radio list loaded from `GET /api/profiles`, "Quick Test (default)" fallback
+- **Custom instructions** — freeform text for the reviewer, auto-saved on change
+- **Launch Test** — calls `POST /api/tests/run` and shows progress via polling
+- **Reset** — clears form and saved state
+- **Summary bar** — score, issues count, test steps completed
+- **Activity timeline** — scrollable log of pipeline events
+- **Progress bar** — visual state indicator during test run
+- **localStorage persistence** — URL, profile ID, and instructions saved/restored under `uiTester-dashboard`
+
+---
+
+## Session Storage
+
+```
+sessions/{timestamp}/
+├── screenshots/
+│   ├── desktop-chromium-1920.png
+│   ├── desktop-firefox-1920.png
+│   ├── mobile-iphone-17-pro-430.png
+│   └── ...
+└── reports/
+    └── report.json
+```
+
+---
+
+## How to Run
 
 ```bash
-cd backend
-npm run build
-
-# CLI runner
-node dist/cli/runner.js --url "https://example.com" --project "E:/Projects/my-app"
-
-# Start API server
-npm run start
-
-# Development with watch
-npm run start:dev
-```
-
----
-
-## How to Run (Dev)
-
-```bash
+# Backend
 cd backend
 npm install
 npx playwright install chromium firefox webkit
-npm run start:dev        # API server on port 3000
-# or
-npm run build
-node dist/cli/runner.js --url "https://example.com"
+npm run start          # Port 3000
+
+# Frontend (separate terminal)
+cd frontend
+npm install
+npx ng serve           # Port 4200
 ```
 
 ---
 
 ## Known Issues
 
-1. **iOS screenshot timeout**: `page.screenshot` sometimes hangs on emulated iOS devices for heavy sites. Fullpage screenshot on iOS emulation needs investigation — skip is thrown and continues to next device.
-2. **Fullpage on iOS**: Playwright's fullPage screenshots on emulated devices can time out on font loading. Current fix: iOS devices skip fullpage state.
-3. **Gemini API key required**: Without it, review falls back to basic rule-based analysis (minimal findings).
-4. **Fixer is conservative**: Most fixes marked for human review to avoid breaking changes.
-5. **Frontend not yet scaffolded**: Angular web UI is planned but not started.
-6. **No API schemas/docs**: No Swagger/OpenAPI integration yet (planned).
+1. **iOS screenshot timeout**: Fullpage screenshots on emulated iOS devices can hang on font loading — iOS devices skip fullpage state.
+2. **Gemini API key**: Without `GEMINI_API_KEY` in `.env`, reviewer falls back to rule-based analysis (minimal findings, always scores 100).
+3. **Fixer is conservative**: Most fixes marked for human review to avoid breaking changes.
+4. **No WebSocket/SSE**: Dashboard polls for results; no real-time streaming yet.
+5. **No Swagger/OpenAPI docs**.
