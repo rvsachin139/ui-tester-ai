@@ -173,6 +173,7 @@ export interface AiKey {
   usageCount: number;
   lastError: string | null;
   lastQuotaAt: string | null;
+  retryAfter: string | null;
   lastUsedAt: string | null;
   createdAt: string;
   updatedAt: string;

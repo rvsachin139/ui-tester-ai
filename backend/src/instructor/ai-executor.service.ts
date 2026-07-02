@@ -3,7 +3,7 @@ import { AiProviderResult } from './ai-provider.interface';
 import { ModelRegistryService } from './model-registry.service';
 import { AiKey } from '../ai-keys/ai-key.entity';
 
-const PARSER_PROMPT = `Convert these UI testing instructions into simple Playwright commands.
+const PARSER_PROMPT = `Convert these UI testing instructions into Playwright commands.
 
 Instructions:
 {instructions}
@@ -22,8 +22,7 @@ Rules:
 - For "click" commands: keep ALL words of the button/link name
 - Drop validation/review lines (checking, verifying, ensuring, visibility)
 - Keep only concrete actions
-
-Output ONLY the commands, one per line. No explanations. If nothing actionable, output nothing.`;
+- Do NOT include thinking, reasoning, or explanations. Only output commands.`;
 
 @Injectable()
 export class AiExecutorService {
@@ -67,7 +66,9 @@ export class AiExecutorService {
         ? { output, reason: `Gemini ${model}` }
         : { output: null, reason: `Gemini ${model} returned empty` };
     } catch (err: any) {
-      return { output: null, reason: `Gemini ${model} error: ${(err?.message || err).slice(0, 300)}` };
+      const msg = (err?.message || err).slice(0, 300);
+      const retryAfter = this.parseRetryAfterText(msg);
+      return { output: null, reason: `Gemini ${model} error: ${msg}`, retryAfter };
     }
   }
 
@@ -91,7 +92,9 @@ export class AiExecutorService {
         ? { output, reason: `Gemini ${model} (vision)` }
         : { output: null, reason: 'Gemini vision returned empty' };
     } catch (err: any) {
-      return { output: null, reason: `Gemini ${model} vision error: ${(err?.message || err).slice(0, 300)}` };
+      const msg = (err?.message || err).slice(0, 300);
+      const retryAfter = this.parseRetryAfterText(msg);
+      return { output: null, reason: `Gemini ${model} vision error: ${msg}`, retryAfter };
     }
   }
 
@@ -110,13 +113,14 @@ export class AiExecutorService {
           model,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.2,
-          max_tokens: 1024,
+          max_tokens: 4096,
         }),
       });
 
       if (!response.ok) {
         const body = await response.text();
-        return { output: null, reason: `${key.provider} ${model} (${response.status}): ${body.slice(0, 200)}` };
+        const retryAfter = this.parseRetryAfter(response, body);
+        return { output: null, reason: `${key.provider} ${model} (${response.status}): ${body.slice(0, 200)}`, retryAfter };
       }
 
       const data = await response.json() as any;
@@ -160,7 +164,8 @@ export class AiExecutorService {
 
       if (!response.ok) {
         const body = await response.text();
-        return { output: null, reason: `${key.provider} ${model} vision (${response.status}): ${body.slice(0, 200)}` };
+        const retryAfter = this.parseRetryAfter(response, body);
+        return { output: null, reason: `${key.provider} ${model} vision (${response.status}): ${body.slice(0, 200)}`, retryAfter };
       }
 
       const data = await response.json() as any;
@@ -171,5 +176,22 @@ export class AiExecutorService {
     } catch (err: any) {
       return { output: null, reason: `${key.provider} vision error: ${(err?.message || err).slice(0, 300)}` };
     }
+  }
+
+  // ── Helpers ──
+
+  private parseRetryAfter(response: Response, body: string): number | undefined {
+    const header = response.headers.get('Retry-After');
+    if (header) {
+      const n = parseInt(header, 10);
+      if (!isNaN(n)) return n;
+    }
+    return this.parseRetryAfterText(body);
+  }
+
+  private parseRetryAfterText(text: string): number | undefined {
+    const m = text.match(/retry.?(?:after|in)\s*(\d+)\s*seconds?/i);
+    if (m) return parseInt(m[1], 10);
+    return undefined;
   }
 }

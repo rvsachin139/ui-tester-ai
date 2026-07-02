@@ -30,7 +30,14 @@ export class InstructorService {
     let lines: string[] = [];
 
     if (reformatted) {
-      lines = reformatted.split('\n').map((l) => l.trim()).filter(Boolean);
+      // Extract only lines matching the expected command format
+      const cmdRe = /^(click\s+"|type\s+"|navigate\s+"|wait\s+\d|scroll\s|hover\s+"|screenshot)/i;
+      lines = reformatted
+        .replace(/`/g, '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => cmdRe.test(l))
+        .filter((l) => !/"(?:TARGET|VALUE|FIELD|URL|N)"|TARGET|VALUE|FIELD/i.test(l));
       if (onStep) onStep({ step: `Parser: ${aiReason}`, status: 'done', result: `Generated ${lines.length} command(s)` });
     } else {
       console.log(`[Instructor] ${aiReason}, using regex fallback`);

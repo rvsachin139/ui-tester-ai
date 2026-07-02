@@ -294,7 +294,9 @@ interface LogEntry {
                       </td>
                       <td class="num-cell">{{ k.usageCount }}</td>
                       <td class="error-cell" [title]="k.lastError || ''">
-                        @if (k.lastQuotaAt) {
+                        @if (k.retryAfter) {
+                          <span class="quota-warn">⏳ Cooldown</span>
+                        } @else if (k.lastQuotaAt) {
                           <span class="quota-warn">⚠ Quota</span>
                         } @else if (k.lastError) {
                           <span class="err-text">Error</span>
@@ -302,7 +304,8 @@ interface LogEntry {
                           <span class="ok-text">OK</span>
                         }
                       </td>
-                      <td>
+                      <td class="actions-cell">
+                        <button class="btn-icon" (click)="startEdit(k)" title="Edit">✎</button>
                         <button class="btn-icon" (click)="deleteKey(k)" title="Delete">✕</button>
                       </td>
                     </tr>
@@ -315,7 +318,7 @@ interface LogEntry {
 
             <!-- Add key form -->
               <div class="add-key-form">
-                <h4>Add API Key</h4>
+                <h4>{{ editingKeyId ? 'Edit API Key' : 'Add API Key' }}</h4>
                 <div class="form-row">
                   <input class="input-field form-select" type="text" placeholder="Provider (e.g. gemini, groq, openai, anthropic...)" [(ngModel)]="newKey.provider" (ngModelChange)="onProviderChange()" list="provider-list" />
                   <datalist id="provider-list">
@@ -333,12 +336,13 @@ interface LogEntry {
                 </div>
                 <div class="form-row">
                   <input class="input-field form-api-key" type="password" placeholder="API Key" [(ngModel)]="newKey.apiKey" />
-                  <label class="vision-toggle">
-                    <input type="checkbox" [(ngModel)]="newKey.supportsImages" />
-                    <span class="toggle-label-text">Supports images (vision)</span>
-                  </label>
                 </div>
-                <button class="btn-add-key" (click)="saveNewKey()" [disabled]="!canAddKey()">Add Key</button>
+                <div class="form-actions">
+                  <button class="btn-add-key" (click)="saveNewKey()" [disabled]="!canAddKey()">{{ editingKeyId ? 'Update Key' : 'Add Key' }}</button>
+                  @if (editingKeyId) {
+                    <button class="btn-cancel" (click)="cancelEdit()">Cancel</button>
+                  }
+                </div>
               </div>
           </div>
         </div>
@@ -869,7 +873,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
   showSettings = false;
   aiKeys: AiKey[] = [];
   aiModels: ModelInfo[] = [];
-  newKey: Partial<AiKey> & { supportsImages: boolean } = { provider: '', model: '', label: '', apiKey: '', supportsImages: false };
+  newKey: Partial<AiKey> = { provider: '', model: '', label: '', apiKey: '' };
+  editingKeyId: number | null = null;
   providers: string[] = [];
   filteredModels: ModelInfo[] = [];
 
@@ -905,30 +910,48 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   onModelChange() {
-    const m = this.aiModels.find(mm => mm.model === this.newKey.model);
-    if (m) {
-      this.newKey.supportsImages = m.supportsImages;
-    }
-    // If custom model, user sets supportsImages manually via checkbox
+    // supportsImages is auto-detected by the backend from the model registry
   }
 
   canAddKey(): boolean {
     return !!this.newKey.provider && !!this.newKey.model && !!this.newKey.label && !!this.newKey.apiKey;
   }
 
+  startEdit(k: AiKey) {
+    this.editingKeyId = k.id;
+    this.newKey = {
+      provider: k.provider,
+      model: k.model,
+      label: k.label,
+      apiKey: k.apiKey,
+    };
+    this.filteredModels = this.aiModels.filter(m => m.provider === k.provider);
+  }
+
+  cancelEdit() {
+    this.editingKeyId = null;
+    this.newKey = { provider: '', model: '', label: '', apiKey: '' };
+    this.filteredModels = [];
+  }
+
   saveNewKey() {
     if (!this.canAddKey()) return;
-    const sub = this.api.createAiKey({
+
+    const payload = {
       provider: this.newKey.provider!,
       model: this.newKey.model!,
       label: this.newKey.label!,
       apiKey: this.newKey.apiKey!,
-      supportsImages: this.newKey.supportsImages,
-      isActive: true,
-    } as any).subscribe({
+    };
+
+    const sub = (this.editingKeyId
+      ? this.api.updateAiKey(this.editingKeyId, payload)
+      : this.api.createAiKey({ ...payload, isActive: true })
+    ).subscribe({
       next: () => {
         this.loadAiKeys();
-        this.newKey = { provider: '', model: '', label: '', apiKey: '', supportsImages: false };
+        this.newKey = { provider: '', model: '', label: '', apiKey: '' };
+        this.editingKeyId = null;
         this.filteredModels = [];
       },
       error: (err) => this.addLog(`Failed to save key: ${err.message}`, 'error'),

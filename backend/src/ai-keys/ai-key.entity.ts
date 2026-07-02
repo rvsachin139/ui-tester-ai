@@ -35,6 +35,9 @@ export class AiKey {
   @Column({ name: 'last_used_at', type: 'datetime', nullable: true })
   lastUsedAt: Date | null;
 
+  @Column({ name: 'retry_after', type: 'datetime', nullable: true })
+  retryAfter: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

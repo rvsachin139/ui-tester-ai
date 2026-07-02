@@ -15,6 +15,8 @@ const MODELS: ModelInfo[] = [
   { provider: 'groq', model: 'llama-3.3-70b-versatile', supportsImages: false, label: 'Llama 3.3 70B', baseUrl: 'https://api.groq.com/openai/v1' },
   { provider: 'groq', model: 'llama-3.1-8b-instant', supportsImages: false, label: 'Llama 3.1 8B', baseUrl: 'https://api.groq.com/openai/v1' },
   { provider: 'groq', model: 'mixtral-8x7b-32768', supportsImages: false, label: 'Mixtral 8x7B', baseUrl: 'https://api.groq.com/openai/v1' },
+  { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', supportsImages: true, label: 'Llama 4 Scout 17B', baseUrl: 'https://api.groq.com/openai/v1' },
+  { provider: 'groq', model: 'meta-llama/llama-4-maverick-17b-128e-instruct', supportsImages: true, label: 'Llama 4 Maverick 17B', baseUrl: 'https://api.groq.com/openai/v1' },
 
   { provider: 'openrouter', model: 'google/gemini-2.0-flash-001', supportsImages: true, label: 'Gemini 2.0 Flash (OpenRouter)', baseUrl: 'https://openrouter.ai/api/v1' },
   { provider: 'openrouter', model: 'openai/gpt-4o', supportsImages: true, label: 'GPT-4o (OpenRouter)', baseUrl: 'https://openrouter.ai/api/v1' },
