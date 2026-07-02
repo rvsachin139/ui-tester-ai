@@ -74,6 +74,7 @@ export interface Issue {
 export interface ScreenshotInfo {
   file: string;
   path: string;
+  url?: string;
   device: string;
   browser: string;
   viewport: string;
@@ -121,5 +122,13 @@ export class ApiService {
 
   getSession(id: string): Observable<Session> {
     return this.http.get<Session>(`${this.baseUrl}/tests/sessions/${id}`);
+  }
+
+  getActiveSessions(): Observable<{ sessionId: string; url: string; startedAt: string }[]> {
+    return this.http.get<{ sessionId: string; url: string; startedAt: string }[]>(`${this.baseUrl}/tests/active`);
+  }
+
+  cancelSession(sessionId: string): Observable<{ sessionId: string; status: string }> {
+    return this.http.delete<{ sessionId: string; status: string }>(`${this.baseUrl}/tests/active/${sessionId}`);
   }
 }

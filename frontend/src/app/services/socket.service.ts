@@ -19,6 +19,27 @@ export interface TestError {
   error: string;
 }
 
+export interface ScreenshotData {
+  file: string;
+  path: string;
+  url: string;
+  device: string;
+  browser: string;
+  viewport: string;
+  state: string;
+}
+
+export interface ScreenshotEvent {
+  sessionId: string;
+  screenshot: ScreenshotData;
+}
+
+export interface SessionEvent {
+  sessionId: string;
+  url: string;
+  startedAt: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class SocketService implements OnDestroy {
   private socket: Socket;
@@ -65,6 +86,27 @@ export class SocketService implements OnDestroy {
     return new Observable((observer) => {
       this.socket.on('test:error', (data: TestError) => observer.next(data));
       return () => this.socket.off('test:error');
+    });
+  }
+
+  onScreenshot(): Observable<ScreenshotEvent> {
+    return new Observable((observer) => {
+      this.socket.on('test:screenshot', (data: ScreenshotEvent) => observer.next(data));
+      return () => this.socket.off('test:screenshot');
+    });
+  }
+
+  onSessionStarted(): Observable<SessionEvent> {
+    return new Observable((observer) => {
+      this.socket.on('test:started', (data: SessionEvent) => observer.next(data));
+      return () => this.socket.off('test:started');
+    });
+  }
+
+  onSessionRemoved(): Observable<{ sessionId: string }> {
+    return new Observable((observer) => {
+      this.socket.on('test:removed', (data: { sessionId: string }) => observer.next(data));
+      return () => this.socket.off('test:removed');
     });
   }
 

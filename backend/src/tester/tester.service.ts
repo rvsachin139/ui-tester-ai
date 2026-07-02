@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { chromium, firefox, webkit, devices } from 'playwright';
 import { join } from 'path';
+import { InstructorService } from '../instructor/instructor.service';
 
 const BROWSER_MAP: Record<string, any> = { chromium, firefox, webkit };
 
@@ -33,18 +34,27 @@ interface TestRunOptions {
   browsers: BrowserConfig[];
   devices: DeviceConfig[];
   screenshotDir: string;
+  instructions?: string;
+  onScreenshot?: (screenshot: ScreenshotResult) => void;
+  shouldAbort?: () => boolean;
 }
 
 @Injectable()
 export class TesterService {
+  constructor(private readonly instructor: InstructorService) {}
+
   async run(options: TestRunOptions): Promise<{
     screenshots: ScreenshotResult[];
     results: any[];
+    instructionResults?: any[];
   }> {
     const results: any[] = [];
     const screenshots: ScreenshotResult[] = [];
+    const allInstructionResults: any[] = [];
 
     for (const bc of options.browsers) {
+      if (options.shouldAbort?.()) break;
+
       const browserType = BROWSER_MAP[bc.browserKey];
       if (!browserType) {
         continue;
@@ -53,6 +63,7 @@ export class TesterService {
       const browser = await browserType.launch({ headless: true });
 
       for (const device of options.devices) {
+        if (options.shouldAbort?.()) break;
         const deviceName = device.deviceId || device.label || 'unknown';
         const isPlaywrightDevice = !!device.playwrightDevice;
 
@@ -74,7 +85,7 @@ export class TesterService {
               await this.captureDeviceStates(
                 page, options.appUrl, 'safari-ios', deviceName,
                 `${descriptor.viewport.width}x${descriptor.viewport.height}`,
-                screenshots, options.screenshotDir,
+                screenshots, options.screenshotDir, options.instructions, options.onScreenshot, allInstructionResults,
               );
             } finally {
               await page.close().catch(() => {});
@@ -91,7 +102,7 @@ export class TesterService {
               await this.captureDeviceStates(
                 page, options.appUrl, bc.browserKey, deviceName,
                 `${device.width}x${device.height}`,
-                screenshots, options.screenshotDir,
+                screenshots, options.screenshotDir, options.instructions, options.onScreenshot, allInstructionResults,
               );
             } finally {
               await page.close().catch(() => {});
@@ -107,7 +118,7 @@ export class TesterService {
       await browser.close().catch(() => {});
     }
 
-    return { screenshots, results };
+    return { screenshots, results, instructionResults: allInstructionResults.length > 0 ? allInstructionResults : undefined };
   }
 
   private async captureDeviceStates(
@@ -118,12 +129,29 @@ export class TesterService {
     viewportStr: string,
     screenshots: ScreenshotResult[],
     screenshotDir: string,
+    instructions?: string,
+    onScreenshot?: (s: ScreenshotResult) => void,
+    allInstructionResults?: any[],
   ): Promise<void> {
     const isIOS = browserName === 'safari-ios';
     console.log(`[Tester] ${appUrl} (${deviceName}, ${browserName}, ${viewportStr})`);
 
     await page.goto(appUrl, { waitUntil: isIOS ? 'domcontentloaded' : 'networkidle', timeout: 45000 });
     await page.waitForTimeout(isIOS ? 3000 : 1000);
+
+    if (instructions) {
+      console.log(`  [instructions] Executing: ${instructions}`);
+      try {
+        const steps = await this.instructor.executeSteps(page, instructions);
+        for (const step of steps) {
+          allInstructionResults!.push(step);
+        }
+        console.log(`  [instructions] All steps done`);
+      } catch (err: any) {
+        console.log(`  [instructions] Failed: ${err.message}`);
+        allInstructionResults!.push({ step: instructions, status: 'error', error: err.message });
+      }
+    }
 
     const prefix = `ss-${Date.now()}`;
     const states: { name: string; action: () => Promise<void> }[] = [
@@ -166,14 +194,16 @@ export class TesterService {
       } else {
         await page.screenshot({ path: filepath });
       }
-      screenshots.push({
+      const screenshot: ScreenshotResult = {
         file: filename,
         path: filepath,
         device: deviceName,
         browser: browserName,
         viewport: viewportStr,
         state: state.name,
-      });
+      };
+      screenshots.push(screenshot);
+      if (onScreenshot) onScreenshot(screenshot);
       console.log(`  [${state.name}] ${filename}`);
     }
   }

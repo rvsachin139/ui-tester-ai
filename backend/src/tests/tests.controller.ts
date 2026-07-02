@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, NotFoundException, BadRequestException, Delete } from '@nestjs/common';
 import { TestsService } from './tests.service';
 
 class RunTestDto {
@@ -33,5 +33,17 @@ export class TestsController {
   @Get('sessions/:id')
   getSession(@Param('id') id: string): any {
     return this.tests.getSession(id);
+  }
+
+  @Get('active')
+  getActiveSessions(): any {
+    return this.tests.getActiveSessions();
+  }
+
+  @Delete('active/:id')
+  cancelSession(@Param('id') id: string): any {
+    const cancelled = this.tests.cancelTest(id);
+    if (!cancelled) throw new NotFoundException(`Active session #${id} not found`);
+    return { sessionId: id, status: 'cancelled' };
   }
 }

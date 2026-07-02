@@ -2,7 +2,7 @@ import { Component, OnInit, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
 import { ApiService, TestProfile, ReviewReport, Issue } from '../services/api.service';
-import { SocketService, TestProgress, TestResult, TestError } from '../services/socket.service';
+import { SocketService, TestProgress, TestResult, TestError, ScreenshotData, SessionEvent } from '../services/socket.service';
 import { Subscription } from 'rxjs';
 
 interface LogEntry {
@@ -91,6 +91,37 @@ interface LogEntry {
           </button>
 
           <button class="btn-reset" (click)="reset()" [disabled]="isRunning">Reset</button>
+
+          <div class="sessions-section">
+            <div class="sessions-header" (click)="showActiveSessions = !showActiveSessions">
+              <span class="sessions-title">Active Sessions</span>
+              <div class="sessions-meta">
+                <span class="sessions-count">{{ activeSessions.length }}</span>
+                <span class="chevron">{{ showActiveSessions ? '▼' : '▶' }}</span>
+              </div>
+            </div>
+            @if (showActiveSessions) {
+              <div class="sessions-list">
+                @for (s of activeSessions; track s.sessionId) {
+                  <div class="session-item">
+                    <div class="session-body">
+                      <span class="session-url" title="{{ s.url }}">{{ s.url }}</span>
+                      <span class="session-time">{{ s.startedAt.slice(11, 19) }}</span>
+                    </div>
+                    <button
+                      class="btn-terminate"
+                      (click)="terminateSession(s.sessionId)"
+                      [disabled]="terminatingId === s.sessionId"
+                      title="Terminate session"
+                    >{{ terminatingId === s.sessionId ? '...' : '✕' }}</button>
+                  </div>
+                }
+                @if (activeSessions.length === 0) {
+                  <div class="sessions-empty">No active sessions</div>
+                }
+              </div>
+            }
+          </div>
         </div>
       </aside>
 
@@ -113,27 +144,82 @@ interface LogEntry {
         </div>
 
         <div class="activity-area">
-          <h2 class="section-title">Activity Log</h2>
-          <div class="log-container" #logContainer>
-            @if (logs.length === 0) {
-              <div class="empty-state">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#3a3c42" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                  <line x1="3" y1="9" x2="21" y2="9"/>
-                  <line x1="9" y1="21" x2="9" y2="9"/>
-                </svg>
-                <p>Enter a URL and launch a test to see activity here.</p>
-              </div>
-            }
-            @for (log of logs; track log.timestamp) {
-              <div class="log-entry" [class]="'log-' + log.type">
-                <span class="log-time">{{ log.timestamp }}</span>
-                <span class="log-badge" [class]="'badge-' + log.type">{{ getBadgeText(log.type) }}</span>
-                <span class="log-msg">{{ log.message }}</span>
-              </div>
-            }
-            <div #scrollAnchor></div>
+          <div class="section-header">
+            <h2 class="section-title">{{ showGallery ? 'Screenshot Gallery' : 'Activity Log' }}</h2>
+            <div class="view-toggle">
+              <button
+                class="toggle-btn"
+                [class.active]="!showGallery"
+                (click)="showGallery = false"
+                [disabled]="isRunning && showGallery"
+              >Log</button>
+              <button
+                class="toggle-btn"
+                [class.active]="showGallery"
+                (click)="showGallery = true"
+                [disabled]="screenshots.length === 0"
+              >Gallery ({{ screenshots.length }})</button>
+            </div>
           </div>
+
+          @if (!showGallery) {
+            <div class="log-container">
+              @if (logs.length === 0) {
+                <div class="empty-state">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#3a3c42" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                    <line x1="3" y1="9" x2="21" y2="9"/>
+                    <line x1="9" y1="21" x2="9" y2="9"/>
+                  </svg>
+                  <p>Enter a URL and launch a test to see activity here.</p>
+                </div>
+              }
+              @for (log of logs; track log.timestamp) {
+                <div class="log-entry" [class.log-running]="log.type === 'running' && isLastRunning(log)">
+                  <span class="log-time">{{ log.timestamp }}</span>
+                  <span class="log-badge" [class]="'badge-' + log.type">{{ getBadgeText(log.type) }}</span>
+                  <span class="log-msg">{{ log.message }}</span>
+                </div>
+              }
+            </div>
+          } @else {
+            <div class="gallery-container">
+              @if (screenshots.length === 0) {
+                <div class="empty-state">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#3a3c42" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                    <circle cx="8.5" cy="8.5" r="1.5"/>
+                    <path d="M21 15l-5-5L5 21"/>
+                  </svg>
+                  <p>No screenshots captured yet.</p>
+                </div>
+              }
+              <div class="gallery-grid">
+                @for (s of screenshots; track s.file) {
+                  <div
+                    class="gallery-thumb"
+                    (mouseenter)="hoveredScreenshot = s"
+                    (mouseleave)="hoveredScreenshot = null"
+                    (click)="viewingScreenshot = s"
+                  >
+                    <img [src]="s.url" [alt]="s.file" class="thumb-img" loading="lazy" />
+                    @if (hoveredScreenshot === s) {
+                      <div class="thumb-overlay">
+                        <span class="overlay-row"><span class="overlay-label">Device:</span> {{ s.device }}</span>
+                        <span class="overlay-row"><span class="overlay-label">Browser:</span> {{ s.browser }}</span>
+                        <span class="overlay-row"><span class="overlay-label">Viewport:</span> {{ s.viewport }}</span>
+                        <span class="overlay-row"><span class="overlay-label">State:</span> {{ s.state }}</span>
+                      </div>
+                    }
+                    <div class="thumb-badges">
+                      <span class="thumb-badge badge-device">{{ s.device }}</span>
+                      <span class="thumb-badge badge-state">{{ s.state }}</span>
+                    </div>
+                  </div>
+                }
+              </div>
+            </div>
+          }
         </div>
 
         @if (isRunning) {
@@ -143,6 +229,21 @@ interface LogEntry {
         }
       </main>
     </div>
+
+    @if (viewingScreenshot) {
+      <div class="lightbox-backdrop" (click)="viewingScreenshot = null">
+        <div class="lightbox-content" (click)="$event.stopPropagation()">
+          <button class="lightbox-close" (click)="viewingScreenshot = null">✕</button>
+          <img [src]="viewingScreenshot.url" [alt]="viewingScreenshot.file" class="lightbox-img" />
+          <div class="lightbox-info">
+            <span><span class="info-label">Device:</span> {{ viewingScreenshot.device }}</span>
+            <span><span class="info-label">Browser:</span> {{ viewingScreenshot.browser }}</span>
+            <span><span class="info-label">Viewport:</span> {{ viewingScreenshot.viewport }}</span>
+            <span><span class="info-label">State:</span> {{ viewingScreenshot.state }}</span>
+          </div>
+        </div>
+      </div>
+    }
 
     <footer class="app-footer">
       <span>&copy; {{ currentYear }} UI Tester AI</span>
@@ -261,6 +362,68 @@ interface LogEntry {
     .btn-reset:hover:not(:disabled) { color: #e8e9ed; border-color: #3a3c42; }
     .btn-reset:disabled { opacity: 0.3; cursor: not-allowed; }
 
+    .sessions-section {
+      margin-top: 16px; padding-top: 16px;
+      border-top: 1px solid #1e1f24;
+    }
+    .sessions-header {
+      display: flex; align-items: center; justify-content: space-between;
+      cursor: pointer; padding: 6px 0;
+      user-select: none;
+    }
+    .sessions-header:hover .sessions-title { color: #e8e9ed; }
+    .sessions-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; font-weight: 500;
+      color: #6b6d76;
+      text-transform: uppercase; letter-spacing: 1px;
+      transition: color 0.15s;
+    }
+    .sessions-meta { display: flex; align-items: center; gap: 6px; }
+    .sessions-count {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px; font-weight: 600;
+      background: #1a1b20; color: #c8a45c;
+      padding: 1px 7px; border-radius: 8px;
+      min-width: 20px; text-align: center;
+    }
+    .chevron { font-size: 10px; color: #3a3c42; }
+    .sessions-list {
+      display: flex; flex-direction: column; gap: 4px;
+      margin-top: 6px;
+    }
+    .session-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 8px; border-radius: 4px;
+      background: #0e0f12; border: 1px solid #1e1f24;
+    }
+    .session-body {
+      flex: 1; display: flex; flex-direction: column;
+      gap: 2px; min-width: 0;
+    }
+    .session-url {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; color: #9a9ba3;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .session-time {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px; color: #3a3c42;
+    }
+    .btn-terminate {
+      width: 26px; height: 26px; min-width: 26px;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent; color: #6b6d76;
+      border: 1px solid #2a2b30; border-radius: 4px;
+      font-size: 12px; cursor: pointer; transition: all 0.15s;
+    }
+    .btn-terminate:hover:not(:disabled) { color: #e45a5a; border-color: #e45a5a; }
+    .btn-terminate:disabled { opacity: 0.4; cursor: not-allowed; }
+    .sessions-empty {
+      font-size: 11px; color: #3a3c42; font-style: italic;
+      padding: 8px; text-align: center;
+    }
+
     .main-area {
       flex: 1; display: flex; flex-direction: column;
       overflow: hidden; min-width: 0;
@@ -302,13 +465,31 @@ interface LogEntry {
       flex: 1; display: flex; flex-direction: column;
       padding: 24px 32px 0; overflow: hidden;
     }
+    .section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 12px;
+    }
     .section-title {
       font-family: 'JetBrains Mono', monospace;
       font-size: 12px; font-weight: 500;
       color: #6b6d76;
       text-transform: uppercase; letter-spacing: 1.5px;
-      margin: 0 0 12px;
+      margin: 0;
     }
+    .view-toggle { display: flex; gap: 4px; }
+    .toggle-btn {
+      padding: 4px 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; font-weight: 500;
+      background: transparent; color: #6b6d76;
+      border: 1px solid #2a2b30; border-radius: 4px;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .toggle-btn:hover:not(:disabled) { color: #e8e9ed; border-color: #3a3c42; }
+    .toggle-btn.active {
+      background: #1a1b20; color: #c8a45c; border-color: #c8a45c;
+    }
+    .toggle-btn:disabled { opacity: 0.3; cursor: not-allowed; }
     .log-container {
       flex: 1; overflow-y: auto;
       display: flex; flex-direction: column; gap: 4px;
@@ -363,6 +544,87 @@ interface LogEntry {
       100% { transform: translateX(400%); }
     }
 
+    .gallery-container { flex: 1; overflow-y: auto; padding-bottom: 12px; }
+    .gallery-container::-webkit-scrollbar { width: 4px; }
+    .gallery-container::-webkit-scrollbar-track { background: transparent; }
+    .gallery-container::-webkit-scrollbar-thumb { background: #2a2b30; border-radius: 2px; }
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .gallery-thumb {
+      position: relative;
+      border-radius: 6px; overflow: hidden;
+      background: #0e0f12;
+      border: 1px solid #1e1f24;
+      aspect-ratio: 16 / 10;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    .gallery-thumb:hover { border-color: #c8a45c; }
+    .thumb-img {
+      width: 100%; height: 100%;
+      object-fit: cover; display: block;
+    }
+    .thumb-overlay {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.82);
+      display: flex; flex-direction: column;
+      justify-content: center; align-items: center;
+      gap: 6px; padding: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; color: #e8e9ed;
+    }
+    .overlay-row { display: flex; gap: 4px; }
+    .overlay-label { color: #c8a45c; font-weight: 500; }
+    .thumb-badges {
+      position: absolute; top: 6px; left: 6px;
+      display: flex; gap: 4px;
+    }
+    .thumb-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px; font-weight: 600;
+      padding: 2px 6px; border-radius: 3px;
+      text-transform: uppercase;
+      backdrop-filter: blur(4px);
+    }
+    .badge-device { background: rgba(0,0,0,0.6); color: #9a9ba3; }
+    .badge-state { background: rgba(200,164,92,0.2); color: #c8a45c; }
+
+    .lightbox-backdrop {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.85);
+      display: flex; align-items: center; justify-content: center;
+      padding: 40px;
+    }
+    .lightbox-content {
+      position: relative; max-width: 90vw; max-height: 90vh;
+      display: flex; flex-direction: column; align-items: center;
+      gap: 16px;
+    }
+    .lightbox-close {
+      position: absolute; top: -36px; right: 0;
+      width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.1); color: #e8e9ed;
+      border: none; border-radius: 4px;
+      font-size: 16px; cursor: pointer;
+      transition: background 0.15s;
+    }
+    .lightbox-close:hover { background: rgba(255,255,255,0.2); }
+    .lightbox-img {
+      max-width: 100%; max-height: calc(90vh - 60px);
+      border-radius: 6px; object-fit: contain;
+      border: 1px solid #2a2b30;
+    }
+    .lightbox-info {
+      display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; color: #9a9ba3;
+    }
+    .info-label { color: #c8a45c; font-weight: 500; }
+
     .app-footer {
       display: flex; align-items: center; justify-content: space-between;
       padding: 10px 32px;
@@ -389,18 +651,46 @@ export class DashboardComponent implements OnInit, OnDestroy {
   stepsCompleted = 0;
   isRunning = false;
   currentYear = new Date().getFullYear();
+  showGallery = false;
+  screenshots: ScreenshotData[] = [];
+  hoveredScreenshot: ScreenshotData | null = null;
+  showActiveSessions = false;
+  activeSessions: { sessionId: string; url: string; startedAt: string }[] = [];
+  terminatingId: string | null = null;
+  viewingScreenshot: ScreenshotData | null = null;
 
   private subs: Subscription[] = [];
+  private sessionSubs: Subscription[] = [];
+  private testTimeout: ReturnType<typeof setTimeout> | null = null;
+  private currentSessionId: string | null = null;
 
   constructor(private api: ApiService, private socket: SocketService) {}
 
   ngOnInit() {
     this.loadSavedState();
     this.loadProfiles();
+    this.loadActiveSessions();
     this.socket.waitForConnection().then(() => {
       this.addLog('Real-time connection established.', 'info');
     });
     this.addLog('Dashboard initialized. Ready to run tests.', 'info');
+
+    const startedSub = this.socket.onSessionStarted().subscribe((data) => {
+      if (!this.activeSessions.find(s => s.sessionId === data.sessionId)) {
+        this.activeSessions = [...this.activeSessions, { sessionId: data.sessionId, url: data.url, startedAt: data.startedAt }];
+      }
+    });
+    const removedSub = this.socket.onSessionRemoved().subscribe((data) => {
+      this.activeSessions = this.activeSessions.filter(s => s.sessionId !== data.sessionId);
+      if (data.sessionId === this.currentSessionId) {
+        this.clearTestTimeout();
+        this.isRunning = false;
+        this.currentSessionId = null;
+        this.subs.forEach(s => s.unsubscribe());
+        this.subs = [];
+      }
+    });
+    this.sessionSubs.push(startedSub, removedSub);
   }
 
   loadSavedState() {
@@ -426,7 +716,41 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
+    this.clearTestTimeout();
     this.subs.forEach(s => s.unsubscribe());
+    this.sessionSubs.forEach(s => s.unsubscribe());
+  }
+
+  loadActiveSessions() {
+    const sub = this.api.getActiveSessions().subscribe({
+      next: (data) => { this.activeSessions = data; },
+      error: () => {},
+    });
+    this.sessionSubs.push(sub);
+  }
+
+  terminateSession(sessionId: string) {
+    this.terminatingId = sessionId;
+    const sub = this.api.cancelSession(sessionId).subscribe({
+      next: () => {
+        this.activeSessions = this.activeSessions.filter(s => s.sessionId !== sessionId);
+        this.terminatingId = null;
+        if (sessionId === this.currentSessionId) {
+          this.clearTestTimeout();
+          this.isRunning = false;
+          this.subs.forEach(s => s.unsubscribe());
+          this.subs = [];
+          this.addLog(`Test terminated.`, 'error');
+        } else {
+          this.addLog(`Session ${sessionId.slice(0, 8)}… terminated.`, 'error');
+        }
+      },
+      error: () => {
+        this.terminatingId = null;
+        this.activeSessions = this.activeSessions.filter(s => s.sessionId !== sessionId);
+      }
+    });
+    this.subs.push(sub);
   }
 
   loadProfiles() {
@@ -447,14 +771,22 @@ export class DashboardComponent implements OnInit, OnDestroy {
   async launchTest() {
     if (!this.url.trim() || this.isRunning) return;
 
+    this.subs.forEach(s => s.unsubscribe());
+    this.subs = [];
+    this.clearTestTimeout();
+
     this.saveState();
     this.isRunning = true;
     this.score = null;
     this.issuesCount = 0;
     this.stepsCompleted = 0;
     this.logs = [];
+    this.screenshots = [];
+    this.hoveredScreenshot = null;
+    this.viewingScreenshot = null;
 
     this.addLog(`Initiating test for ${this.url}...`, 'running');
+
 
     const profile = this.selectedProfileId
       ? this.profiles.find(p => p.id === this.selectedProfileId)
@@ -468,8 +800,21 @@ export class DashboardComponent implements OnInit, OnDestroy {
       this.addLog(data.message, 'running');
     });
 
+    const screenshotSub = this.socket.onScreenshot().subscribe((data) => {
+      this.screenshots = [...this.screenshots, data.screenshot];
+      this.addLog(`Captured: ${data.screenshot.browser} / ${data.screenshot.device} (${data.screenshot.state})`, 'info');
+    });
+
     const completeSub = this.socket.onComplete().subscribe((data: TestResult) => {
+      this.logs = this.logs.map(l => l.type === 'running' ? { ...l, type: 'success' as const } : l);
       const result = data.result as any;
+      if (result.screenshots) {
+        for (const s of result.screenshots) {
+          if (!this.screenshots.find(ex => ex.file === s.file)) {
+            this.screenshots = [...this.screenshots, s];
+          }
+        }
+      }
       if (result.report) {
         const r: ReviewReport = result.report;
         this.score = r.overallScore;
@@ -497,15 +842,20 @@ export class DashboardComponent implements OnInit, OnDestroy {
       } else {
         this.addLog(`Test completed: ${result.summary || 'No report data'}`, 'info');
       }
+      this.clearTestTimeout();
+      this.currentSessionId = null;
       this.isRunning = false;
     });
 
     const errorSub = this.socket.onError().subscribe((data: TestError) => {
+      this.logs = this.logs.map(l => l.type === 'running' ? { ...l, type: 'error' as const } : l);
       this.addLog(`Error: ${data.error}`, 'error');
+      this.clearTestTimeout();
+      this.currentSessionId = null;
       this.isRunning = false;
     });
 
-    this.subs.push(progressSub, completeSub, errorSub);
+    this.subs.push(progressSub, screenshotSub, completeSub, errorSub);
 
     const socketId = await this.socket.waitForConnection();
 
@@ -516,12 +866,24 @@ export class DashboardComponent implements OnInit, OnDestroy {
       undefined,
       socketId
     ).subscribe({
+      next: (res) => { this.currentSessionId = res.sessionId; },
       error: (err) => {
         this.addLog(`Failed to start test: ${err.message || 'Unknown error'}`, 'error');
+        this.clearTestTimeout();
+        this.currentSessionId = null;
         this.isRunning = false;
       }
     });
     this.subs.push(sub);
+
+    this.testTimeout = setTimeout(() => {
+      if (!this.isRunning) return;
+      this.addLog('Test timed out — no response from backend after 3 minutes. The server may have crashed or the connection was lost.', 'error');
+      this.currentSessionId = null;
+      this.isRunning = false;
+      this.subs.forEach(s => s.unsubscribe());
+      this.subs = [];
+    }, 180000);
   }
 
   reset() {
@@ -532,8 +894,27 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.issuesCount = 0;
     this.stepsCompleted = 0;
     this.logs = [];
+    this.screenshots = [];
+    this.hoveredScreenshot = null;
+    this.viewingScreenshot = null;
+    this.showGallery = false;
+    this.terminatingId = null;
+    this.currentSessionId = null;
+    this.clearTestTimeout();
     this.saveState();
     this.addLog('Dashboard reset.', 'info');
+  }
+
+  private clearTestTimeout() {
+    if (this.testTimeout) { clearTimeout(this.testTimeout); this.testTimeout = null; }
+  }
+
+  isLastRunning(log: LogEntry): boolean {
+    if (log.type !== 'running') return false;
+    for (let i = this.logs.length - 1; i >= 0; i--) {
+      if (this.logs[i].type === 'running') return this.logs[i] === log;
+    }
+    return false;
   }
 
   private addLog(message: string, type: LogEntry['type']) {

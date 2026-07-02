@@ -9,8 +9,16 @@ import { EventsGateway } from '../events/events.gateway';
 
 const SESSIONS_DIR = join(process.cwd(), '..', 'sessions');
 
+interface ActiveSession {
+  url: string;
+  startedAt: string;
+  abort: () => void;
+}
+
 @Injectable()
 export class TestsService {
+  private activeSessions = new Map<string, ActiveSession>();
+
   constructor(
     private readonly tester: TesterService,
     private readonly reviewer: ReviewerService,
@@ -28,16 +36,46 @@ export class TestsService {
   }): Promise<{ sessionId: string; status: string }> {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
-    this.processTest(timestamp, options).catch((err) => {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      console.error(`[TestsService] Test ${timestamp} failed:`, err);
-      if (options.socketId) {
-        this.events.emitToClient(options.socketId, 'test:error', { sessionId: timestamp, error: errorMsg });
-      }
-      this.events.emitToAll('test:error', { sessionId: timestamp, error: errorMsg });
+    let aborted = false;
+    const abort = () => { aborted = true; };
+
+    this.activeSessions.set(timestamp, { url: options.url, startedAt: new Date().toISOString(), abort });
+
+    this.events.emitToAll('test:started', {
+      sessionId: timestamp,
+      url: options.url,
+      startedAt: new Date().toISOString(),
     });
 
+    this.processTest(timestamp, options, () => aborted)
+      .catch((err) => {
+        if (aborted) return;
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+        console.error(`[TestsService] Test ${timestamp} failed:`, err);
+        if (options.socketId) {
+          this.events.emitToClient(options.socketId, 'test:error', { sessionId: timestamp, error: errorMsg });
+        }
+        this.events.emitToAll('test:error', { sessionId: timestamp, error: errorMsg });
+      })
+      .finally(() => {
+        this.activeSessions.delete(timestamp);
+        this.events.emitToAll('test:removed', { sessionId: timestamp });
+      });
+
     return { sessionId: timestamp, status: 'queued' };
+  }
+
+  getActiveSessions(): { sessionId: string; url: string; startedAt: string }[] {
+    return Array.from(this.activeSessions.entries()).map(([id, s]) => ({
+      sessionId: id, url: s.url, startedAt: s.startedAt,
+    }));
+  }
+
+  cancelTest(sessionId: string): boolean {
+    const session = this.activeSessions.get(sessionId);
+    if (!session) return false;
+    session.abort();
+    return true;
   }
 
   private async processTest(sessionId: string, options: {
@@ -46,13 +84,17 @@ export class TestsService {
     instructions?: string;
     projectPath?: string;
     socketId?: string;
-  }): Promise<void> {
+  }, shouldAbort: () => boolean): Promise<void> {
     const { socketId, url, profileId, instructions, projectPath } = options;
 
     const emit = (event: string, data: Record<string, unknown>) => {
       const payload = { ...data, sessionId };
-      if (socketId) this.events.emitToClient(socketId, event, payload);
-      this.events.emitToAll(event, payload);
+      if (socketId) {
+        this.events.emitToClient(socketId, event, payload);
+        this.events.emitToAllExcept(socketId, event, payload);
+      } else {
+        this.events.emitToAll(event, payload);
+      }
     };
 
     const sessionDir = join(SESSIONS_DIR, sessionId);
@@ -87,12 +129,49 @@ export class TestsService {
 
     emit('test:progress', { phase: 'screenshots', message: `Capturing screenshots across ${devices.length} device(s) and ${browsers.length} browser(s)...` });
 
-    const { screenshots } = await this.tester.run({
+    const screenshotUrlPrefix = `/sessions/${sessionId}/screenshots/`;
+
+    if (instructions) {
+      emit('test:progress', { phase: 'instructions', message: `Executing custom instructions on each device...` });
+    }
+
+    const { screenshots, results, instructionResults } = await this.tester.run({
       appUrl: url,
       browsers,
       devices,
       screenshotDir,
+      instructions,
+      onScreenshot: (s) => {
+        emit('test:screenshot', {
+          screenshot: {
+            file: s.file,
+            path: s.path,
+            url: `${screenshotUrlPrefix}${s.file}`,
+            device: s.device,
+            browser: s.browser,
+            viewport: s.viewport,
+            state: s.state,
+          },
+        });
+      },
+      shouldAbort,
     });
+
+    if (instructionResults && instructionResults.length > 0) {
+      for (const r of instructionResults) {
+        if (r.status === 'error') {
+          emit('test:progress', { phase: 'instructions', message: `Instruction "${r.step}" failed: ${r.error}` });
+        }
+      }
+    }
+
+    if (results && results.length > 0) {
+      for (const r of results) {
+        if (r.status === 'error') {
+          emit('test:progress', { phase: 'screenshots', message: `Error on ${r.device}/${r.browser}: ${r.error}` });
+        }
+      }
+    }
 
     emit('test:progress', { phase: 'screenshots', message: `Captured ${screenshots.length} screenshot(s)`, progress: 50 });
 
@@ -136,6 +215,7 @@ export class TestsService {
         screenshots: screenshots.map((s) => ({
           file: s.file,
           path: s.path,
+          url: `/sessions/${sessionId}/screenshots/${s.file}`,
           device: s.device,
           browser: s.browser,
           viewport: s.viewport,

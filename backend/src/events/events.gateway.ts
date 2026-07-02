@@ -18,4 +18,8 @@ export class EventsGateway {
   emitToAll(event: string, data: unknown) {
     this.server.emit(event, data);
   }
+
+  emitToAllExcept(clientId: string, event: string, data: unknown) {
+    this.server.except(clientId).emit(event, data);
+  }
 }
