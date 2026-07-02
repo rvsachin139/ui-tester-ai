@@ -155,6 +155,8 @@ export class InstructorService {
   }
 
   private async executeClick(page: any, target: string) {
+    // Strip HTML tags from target (AI sometimes outputs tag names from user hints)
+    target = target.replace(/<[^>]+>/g, '').trim();
     const targets = [target];
     if (target.includes(' ')) targets.push(target.replace(/\s+/g, ''));
     // Login/sign-in variants — try common alternatives
@@ -166,33 +168,72 @@ export class InstructorService {
       const locators: any[] = [
         page.getByRole('button', { name: new RegExp(flexEscaped, 'i') }),
         page.getByRole('link', { name: new RegExp(flexEscaped, 'i') }),
+        page.getByRole('menuitem', { name: new RegExp(flexEscaped, 'i') }),
         page.getByText(new RegExp(flexEscaped, 'i')),
         page.locator(`button:has-text("${t}"), a:has-text("${t}"), [role="button"]:has-text("${t}")`),
         page.locator(`[aria-label="${t}"]`),
+        page.locator(`[title="${t}"]`),
+        page.locator(`[data-testid="${t}"]`),
         page.locator(`[href*="${t.toLowerCase()}"]`),
+        page.locator(`text="${t}"`).first(),
       ];
       for (const loc of locators) {
         if (await this.safeCount(loc)) {
-          await loc.first().evaluate((el: any) => el.click());
+          try {
+            await loc.first().click({ timeout: 5000 });
+          } catch {
+            await loc.first().evaluate((el: any) => el.click());
+          }
           await page.waitForTimeout(2000);
           await page.waitForLoadState('networkidle').catch(() => {});
           return `Clicked "${t}"`;
         }
       }
     }
-    const found = await page.evaluate((text: string) => {
-      for (const tag of ['button', 'a', 'span', 'div', 'input', 'li', 'label']) {
-        for (const el of document.querySelectorAll(tag)) {
-          if (el.textContent?.toLowerCase().includes(text.toLowerCase()) &&
-              (el instanceof HTMLElement || el instanceof SVGElement)) {
-            (el as HTMLElement).scrollIntoView({ block: 'center' });
-            (el as HTMLElement).click();
-            return { tag: el.tagName, text: el.textContent?.trim().slice(0, 50) };
-          }
+    const found = await page.evaluate((text: string, allTargets: string[]) => {
+      const isClickable = (el: Element) =>
+        (el instanceof HTMLElement || el instanceof SVGElement) &&
+        (getComputedStyle(el).cursor === 'pointer' ||
+         /^(button|a|input|select|textarea|label)$/i.test(el.tagName) ||
+         el.getAttribute('role') === 'button' ||
+         el.hasAttribute('onclick') ||
+         el.getAttribute('tabindex') === '0');
+
+      // Search by text content — prefer pointer-cursor elements
+      for (const el of document.querySelectorAll('*')) {
+        if (el.textContent?.trim().toLowerCase() === text.toLowerCase() && isClickable(el)) {
+          (el as HTMLElement).scrollIntoView({ block: 'center' });
+          (el as HTMLElement).click();
+          return { tag: el.tagName, text: el.textContent.trim().slice(0, 50) };
+        }
+      }
+      for (const el of document.querySelectorAll('*')) {
+        if (el.textContent?.toLowerCase().includes(text.toLowerCase()) && isClickable(el)) {
+          (el as HTMLElement).scrollIntoView({ block: 'center' });
+          (el as HTMLElement).click();
+          return { tag: el.tagName, text: el.textContent.trim().slice(0, 50) };
+        }
+      }
+      // Search by alt text (image icons)
+      for (const t of allTargets) {
+        const img = document.querySelector(`img[alt*="${t}" i]`);
+        if (img && (img instanceof HTMLElement)) {
+          img.scrollIntoView({ block: 'center' });
+          img.click();
+          return { tag: 'img', text: img.getAttribute('alt') || '' };
+        }
+      }
+      // Last resort — any element with matching text
+      for (const el of document.querySelectorAll('*')) {
+        if (el.textContent?.toLowerCase().includes(text.toLowerCase()) &&
+            (el instanceof HTMLElement || el instanceof SVGElement)) {
+          (el as HTMLElement).scrollIntoView({ block: 'center' });
+          (el as HTMLElement).click();
+          return { tag: el.tagName, text: el.textContent.trim().slice(0, 50) };
         }
       }
       return null;
-    }, target);
+    }, target, targets);
     if (found) {
       await page.waitForTimeout(2000);
       await page.waitForLoadState('networkidle').catch(() => {});
@@ -202,28 +243,40 @@ export class InstructorService {
   }
 
   private async executeType(page: any, text: string, target: string) {
-    const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const isPassword = /pass/i.test(target);
-    const locators: any[] = [
-      page.getByPlaceholder(new RegExp(escaped, 'i')),
-      page.getByLabel(new RegExp(escaped, 'i')),
-      page.getByRole('textbox', { name: new RegExp(escaped, 'i') }),
-      ...(isPassword ? [page.locator('input[type="password"]')] : []),
-      page.locator(`[name*="${target}"]`),
-      page.locator(`[id*="${target}"]`),
-      page.locator(`[aria-label="${target}"]`),
-      page.locator(`input:not([type]), input[type="${isPassword ? 'password' : 'text'}"]`),
-    ];
-    for (const loc of locators) {
-      if (await this.safeCount(loc)) {
-        await loc.first().fill(text);
-        return `Typed "${text}" into "${target}"`;
+    // Strip CSS selectors and parenthetical hints that AI sometimes includes
+    target = target.replace(/\[.*?\]/g, '').replace(/\(.*?\)/g, '').replace(/<[^>]+>/g, '').trim();
+    // Build candidate targets — try common field name variants
+    const candidates = [target];
+    if (/user|email/i.test(target)) {
+      candidates.push('email', 'username', 'user');
+    }
+    if (/pass/i.test(target)) {
+      candidates.push('password');
+    }
+    for (const t of candidates) {
+      const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const isPassword = /pass/i.test(t);
+      const locators: any[] = [
+        page.getByPlaceholder(new RegExp(escaped, 'i')),
+        page.getByLabel(new RegExp(escaped, 'i')),
+        page.getByRole('textbox', { name: new RegExp(escaped, 'i') }),
+        ...(isPassword ? [page.locator('input[type="password"]')] : []),
+        page.locator(`[name*="${t}"]`),
+        page.locator(`[id*="${t}"]`),
+        page.locator(`[aria-label="${t}"]`),
+      ];
+      for (const loc of locators) {
+        if (await this.safeCount(loc)) {
+          await loc.first().fill(text);
+          return `Typed "${text}" into "${t}"`;
+        }
       }
     }
     throw new Error(`Could not find input: "${target}"`);
   }
 
   private async executeHover(page: any, target: string) {
+    target = target.replace(/\[.*?\]/g, '').replace(/\(.*?\)/g, '').replace(/<[^>]+>/g, '').trim();
     const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const locators = [
       page.getByRole('button', { name: new RegExp(escaped, 'i') }),
