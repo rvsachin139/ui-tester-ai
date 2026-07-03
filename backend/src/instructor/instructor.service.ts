@@ -26,7 +26,21 @@ export class InstructorService {
 
     console.log(`[Instructor] Input: ${instructions}`);
 
-    const { output: reformatted, reason: aiReason } = await this.aiInstructor.reformat(instructions);
+    // Extract page elements so AI can reference real element names
+    let pageElements = '';
+    try {
+      const elements = await this.getPageElements(page);
+      pageElements = elements.join('\n');
+      console.log(`[Instructor] Page elements (${elements.length}): ${pageElements.slice(0, 500)}`);
+    } catch (e: any) {
+      console.log(`[Instructor] getPageElements error: ${e.message}`);
+    }
+
+    const enhancedInstructions = pageElements
+      ? `${instructions}\n\nPage interactive elements (use these exact labels):\n${pageElements}`
+      : instructions;
+
+    const { output: reformatted, reason: aiReason } = await this.aiInstructor.reformat(enhancedInstructions);
     let lines: string[] = [];
 
     if (reformatted) {
@@ -165,6 +179,7 @@ export class InstructorService {
     for (const t of targets) {
       const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const flexEscaped = escaped.replace(/\s+/g, '\\s*');
+      const isCssSelector = /^[.#[\w-]/.test(t) && /[ >+~]/.test(t);
       const locators: any[] = [
         page.getByRole('button', { name: new RegExp(flexEscaped, 'i') }),
         page.getByRole('link', { name: new RegExp(flexEscaped, 'i') }),
@@ -176,6 +191,10 @@ export class InstructorService {
         page.locator(`[data-testid="${t}"]`),
         page.locator(`[href*="${t.toLowerCase()}"]`),
         page.locator(`text="${t}"`).first(),
+        ...(isCssSelector ? [
+          page.locator(t),
+          page.locator(t.replace(/\s*>\s*/g, ' ')),  // descendant version (pierces shadow DOM)
+        ] : []),
       ];
       for (const loc of locators) {
         if (await this.safeCount(loc)) {
@@ -190,7 +209,44 @@ export class InstructorService {
         }
       }
     }
-    const found = await page.evaluate((text: string, allTargets: string[]) => {
+    const found = await page.evaluate(({ text, allTargets }: { text: string; allTargets: string[] }) => {
+      // Deep query that traverses shadow DOM roots
+      const deepQuery = (root: Document | ShadowRoot, selector: string): Element | null => {
+        let found = root.querySelector(selector);
+        if (found) return found;
+        for (const el of root.querySelectorAll('*')) {
+          if (el.shadowRoot) {
+            found = deepQuery(el.shadowRoot, selector);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+
+      const deepQueryAll = (root: Document | ShadowRoot): Element[] => {
+        const result: Element[] = [];
+        result.push(...Array.from(root.querySelectorAll('*')));
+        for (const el of root.querySelectorAll('*')) {
+          if (el.shadowRoot) {
+            result.push(...deepQueryAll(el.shadowRoot));
+          }
+        }
+        return result;
+      };
+
+      // If target looks like a CSS selector, try it with shadow DOM piercing
+      if (/[ >+~]/.test(text) || text.startsWith('.') || text.startsWith('#')) {
+        try {
+          const descendant = text.replace(/\s*>\s*/g, ' ');
+          const el = deepQuery(document, descendant);
+          if (el instanceof HTMLElement || el instanceof SVGElement) {
+            (el as HTMLElement).scrollIntoView({ block: 'center' });
+            (el as HTMLElement).click();
+            return { tag: el.tagName, text: el.textContent?.trim().slice(0, 50) || '' };
+          }
+        } catch {}
+      }
+
       const isClickable = (el: Element) =>
         (el instanceof HTMLElement || el instanceof SVGElement) &&
         (getComputedStyle(el).cursor === 'pointer' ||
@@ -199,15 +255,17 @@ export class InstructorService {
          el.hasAttribute('onclick') ||
          el.getAttribute('tabindex') === '0');
 
+      const allElements = deepQueryAll(document);
+
       // Search by text content — prefer pointer-cursor elements
-      for (const el of document.querySelectorAll('*')) {
+      for (const el of allElements) {
         if (el.textContent?.trim().toLowerCase() === text.toLowerCase() && isClickable(el)) {
           (el as HTMLElement).scrollIntoView({ block: 'center' });
           (el as HTMLElement).click();
           return { tag: el.tagName, text: el.textContent.trim().slice(0, 50) };
         }
       }
-      for (const el of document.querySelectorAll('*')) {
+      for (const el of allElements) {
         if (el.textContent?.toLowerCase().includes(text.toLowerCase()) && isClickable(el)) {
           (el as HTMLElement).scrollIntoView({ block: 'center' });
           (el as HTMLElement).click();
@@ -216,7 +274,7 @@ export class InstructorService {
       }
       // Search by alt text (image icons)
       for (const t of allTargets) {
-        const img = document.querySelector(`img[alt*="${t}" i]`);
+        const img = deepQuery(document, `img[alt*="${t}" i]`);
         if (img && (img instanceof HTMLElement)) {
           img.scrollIntoView({ block: 'center' });
           img.click();
@@ -224,7 +282,7 @@ export class InstructorService {
         }
       }
       // Last resort — any element with matching text
-      for (const el of document.querySelectorAll('*')) {
+      for (const el of allElements) {
         if (el.textContent?.toLowerCase().includes(text.toLowerCase()) &&
             (el instanceof HTMLElement || el instanceof SVGElement)) {
           (el as HTMLElement).scrollIntoView({ block: 'center' });
@@ -233,7 +291,7 @@ export class InstructorService {
         }
       }
       return null;
-    }, target, targets);
+    }, { text: target, allTargets: targets });
     if (found) {
       await page.waitForTimeout(2000);
       await page.waitForLoadState('networkidle').catch(() => {});
@@ -260,15 +318,26 @@ export class InstructorService {
         page.getByPlaceholder(new RegExp(escaped, 'i')),
         page.getByLabel(new RegExp(escaped, 'i')),
         page.getByRole('textbox', { name: new RegExp(escaped, 'i') }),
-        ...(isPassword ? [page.locator('input[type="password"]')] : []),
-        page.locator(`[name*="${t}"]`),
-        page.locator(`[id*="${t}"]`),
-        page.locator(`[aria-label="${t}"]`),
+        ...(isPassword ? [
+          page.locator('input[type="password"]'),
+          page.locator('input[type="password"]:visible'),
+        ] : []),
+        page.locator(`[name*="${t}"]:visible`),
+        page.locator(`[id*="${t}"]:visible`),
+        page.locator(`[aria-label="${t}"]:visible`),
       ];
       for (const loc of locators) {
         if (await this.safeCount(loc)) {
           await loc.first().fill(text);
           return `Typed "${text}" into "${t}"`;
+        }
+      }
+      // Last resort for password: force-fill any password input
+      if (isPassword) {
+        const pwField = page.locator('input[type="password"]').first();
+        if (await this.safeCount(pwField)) {
+          await pwField.fill(text, { force: true });
+          return `Typed "${text}" into password field (forced)`;
         }
       }
     }
@@ -400,6 +469,39 @@ export class InstructorService {
       if (raw && raw.length > 1) targets.push(raw);
     }
     return targets;
+  }
+
+  private async getPageElements(page: any): Promise<string[]> {
+    try {
+      const snapshot = await page.accessibility.snapshot();
+      if (!snapshot) return [];
+      const items: string[] = [];
+      const seen = new Set<string>();
+      const interactives = new Set(['button', 'link', 'textbox', 'combobox', 'checkbox', 'radio',
+        'tab', 'menuitem', 'menuitemcheckbox', 'switch', 'slider', 'searchbox',
+        'text', 'generic', 'group', 'heading', 'dialog', 'listitem', 'option']);
+      const skip = /skip|menu|toggle|hamburger|navigation|navbar/i;
+
+      const walk = (node: any) => {
+        if (!node || items.length >= 50) return;
+        const role = (node.role || '').toLowerCase();
+        const name = (node.name || '').trim();
+        if (interactives.has(role) && name.length > 0 && !skip.test(name)) {
+          const key = `${role}:${name.toLowerCase()}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            items.push(`${role}=${name}`);
+          }
+        }
+        if (node.children) {
+          for (const c of node.children) walk(c);
+        }
+      };
+      walk(snapshot);
+      return items;
+    } catch {
+      return [];
+    }
   }
 
   private async safeCount(loc: any): Promise<boolean> {
